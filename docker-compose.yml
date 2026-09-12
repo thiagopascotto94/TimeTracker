@@ -1,0 +1,29 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: time-tracking-app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - SESSION_SECRET=${SESSION_SECRET:-time-tracking-faturamento-secret-key-2026}
+      - DB_PATH=/app/data/database.sqlite
+      # Descomente e defina se for utilizar a chave de API do Gemini:
+      # - GEMINI_API_KEY=${GEMINI_API_KEY}
+      # - APP_URL=${APP_URL:-http://localhost:3000}
+    volumes:
+      - app-data:/app/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/api/health', (r) => { if (r.statusCode !== 200) process.exit(1); })"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  app-data:
+    driver: local

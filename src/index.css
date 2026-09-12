@@ -1,0 +1,57 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  .dark {
+    background-color: #09090b;
+    color: #f4f4f5;
+  }
+  
+  .dark .bg-white,
+  .dark [class*="dark:bg-neutral-900"],
+  .dark [class*="dark:bg-neutral-950"],
+  .dark [class*="dark:bg-neutral-850"] {
+    background-color: #121215 !important;
+  }
+
+  .dark .bg-neutral-50,
+  .dark .bg-neutral-100,
+  .dark [class*="bg-neutral-50"],
+  .dark [class*="bg-neutral-100"] {
+    background-color: #1a1a1f !important;
+  }
+
+  .dark .bg-neutral-200,
+  .dark .bg-neutral-300 {
+    background-color: #27272a !important;
+  }
+
+  .dark .text-neutral-400,
+  .dark .text-neutral-500,
+  .dark .text-neutral-600,
+  .dark .text-neutral-700,
+  .dark [class*="text-neutral-400"],
+  .dark [class*="text-neutral-500"],
+  .dark [class*="text-neutral-600"],
+  .dark [class*="text-neutral-700"] {
+    color: #d4d4d8 !important;
+  }
+
+  .dark .text-neutral-800,
+  .dark .text-neutral-900,
+  .dark [class*="text-neutral-800"],
+  .dark [class*="text-neutral-900"] {
+    color: #fafafa !important;
+  }
+
+  .dark .border-neutral-200,
+  .dark .border-neutral-300,
+  .dark [class*="border-neutral-200"],
+  .dark [class*="border-neutral-300"] {
+    border-color: #27272a !important;
+  }
+}
+
+
+

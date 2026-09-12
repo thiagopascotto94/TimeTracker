@@ -1,0 +1,6 @@
+{
+  "name": "Time Tracking & Faturamento",
+  "description": "Sistema de rastreamento de tempo de trabalho com precificação por hora, metas com alertas, tarefas em tempo real, relatórios financeiros e compartilhamento público.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
