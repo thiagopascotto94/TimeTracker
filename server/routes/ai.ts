@@ -81,6 +81,129 @@ aiRouter.get('/models', async (req: AuthenticatedRequest, res: Response) => {
   });
 });
 
+// POST /api/ai/suggest-title
+// Sugere um título conciso e profissional para a sessão com base nas tarefas e no cliente
+aiRouter.post('/suggest-title', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { sessionId, tasks: inputTasks, currentTitle, clientName: inputClientName } = req.body || {};
+    let taskList: string[] = Array.isArray(inputTasks) ? inputTasks.filter(Boolean) : [];
+    let clientName: string = inputClientName || '';
+    let existingTitle: string = currentTitle || '';
+
+    // Se sessionId for enviado, complementa buscando tarefas e cliente no banco de dados
+    if (sessionId) {
+      const session = await TimeSession.findOne({
+        where: { id: sessionId, tenant_id: req.tenantId! },
+        include: [
+          { model: Task, as: 'Tasks' },
+          { model: Client, as: 'Client' },
+        ],
+      });
+      if (session) {
+        if (taskList.length === 0 && (session as any).Tasks) {
+          taskList = (session as any).Tasks.map((t: any) => t.description).filter(Boolean);
+        }
+        if (!clientName && (session as any).Client?.name) {
+          clientName = (session as any).Client.name;
+        }
+        if (!existingTitle && session.title) {
+          existingTitle = session.title;
+        }
+      }
+    }
+
+    if (taskList.length === 0) {
+      return res.status(400).json({
+        error: 'Nenhuma tarefa registrada nesta sessão para sugerir um título com base nelas.',
+      });
+    }
+
+    const tasksFormatted = taskList.map((t, idx) => `${idx + 1}. ${t}`).join('\n');
+    const prompt = `Você é um especialista em produtividade, time tracking e gestão de projetos.
+Analise a seguinte lista de tarefas concluídas durante uma sessão de trabalho:
+${tasksFormatted}
+${clientName ? `Cliente associado: ${clientName}` : ''}
+${existingTitle ? `Título provisório anterior: ${existingTitle}` : ''}
+
+Objetivo: Gere um título único, conciso, direto e profissional em Português do Brasil para esta sessão de trabalho (máximo de 3 a 7 palavras).
+Regras estritas:
+1. Resuma a essência das atividades de forma executiva (exemplos: "Desenvolvimento de APIs e Ajustes no Frontend", "Alinhamento de Requisitos e Planejamento de Sprint", "Correção de Bugs e Deploy").
+2. Retorne APENAS o título sugerido em texto puro.
+3. NÃO use aspas, NÃO adicione prefixos como "Título:", NÃO coloque ponto final, e NÃO dê nenhuma explicação.`;
+
+    const kiloConfig = getKiloConfig();
+    const geminiApiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
+    const preferred = (process.env.AI_PROVIDER || '').toLowerCase();
+
+    let suggestedTitle = '';
+
+    // 1. Tenta Kilo se configurado e preferido
+    if ((preferred === 'kilo' || !geminiApiKey) && kiloConfig.isConfigured) {
+      try {
+        const { client, model } = getKiloClient();
+        const completion = await client.chat.completions.create({
+          model: model || 'gemini-3.8-flash',
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.3,
+        });
+        suggestedTitle = completion.choices?.[0]?.message?.content?.trim() || '';
+      } catch (kiloErr) {
+        console.warn('Kilo suggest-title failed, fallback to Gemini:', kiloErr);
+      }
+    }
+
+    // 2. Tenta Gemini com chave de API
+    if (!suggestedTitle && geminiApiKey) {
+      try {
+        const ai = getGenAI();
+        const candidateModels = ['gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-2.5-flash'];
+        for (const m of candidateModels) {
+          try {
+            const resp = await ai.models.generateContent({
+              model: m,
+              contents: prompt,
+            });
+            const text = resp.text?.trim();
+            if (text) {
+              suggestedTitle = text;
+              break;
+            }
+          } catch (modelErr) {
+            console.warn(`Model ${m} failed in suggest-title:`, modelErr);
+          }
+        }
+      } catch (geminiErr) {
+        console.warn('Gemini suggest-title failed:', geminiErr);
+      }
+    }
+
+    // 3. Fallback inteligente baseado em regras se a IA estiver indisponível
+    if (!suggestedTitle) {
+      if (taskList.length === 1) {
+        suggestedTitle = taskList[0].slice(0, 50);
+      } else if (taskList.length > 1) {
+        suggestedTitle = `${taskList[0].slice(0, 25)} e ${taskList[1].slice(0, 25)}`;
+      } else {
+        suggestedTitle = existingTitle || 'Sessão de Trabalho';
+      }
+    }
+
+    // Remove aspas ou prefixos indesejados
+    suggestedTitle = suggestedTitle
+      .replace(/^["'`“”«»]+|["'`“”«»]+$/g, '')
+      .replace(/^(título|titulo|sugestão|sugestao):\s*/i, '')
+      .trim();
+
+    return res.json({
+      suggestedTitle,
+      tasksCount: taskList.length,
+    });
+  } catch (err: any) {
+    console.error('Error in suggest-title:', err);
+    return res.status(500).json({ error: 'Erro ao sugerir título com IA', details: err.message });
+  }
+});
+
 
 // Lazy initialization of GoogleGenAI client (following system skill guidelines)
 let currentApiKey: string | null = null;

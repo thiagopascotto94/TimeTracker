@@ -11,8 +11,11 @@ import { ClientsView } from './components/ClientsView';
 import { SettingsView } from './components/SettingsView';
 import { PublicReportView } from './components/PublicReportView';
 import { AuthModal } from './components/AuthModal';
+import { LoginView } from './components/LoginView';
 import { AiAssistantView } from './components/AiAssistantView';
+import { PWANotificationBanner } from './components/PWANotificationBanner';
 import { formatCurrency, formatDurationHuman } from './utils/format';
+import { apiFetch } from './utils/api';
 
 function AppContent() {
   const { addToast } = useToast();
@@ -90,7 +93,7 @@ function AppContent() {
   // Fetch Current User & Tenant
   const fetchAuthUser = useCallback(async () => {
     try {
-      const res = await fetch('/api/auth/me');
+      const res = await apiFetch('/api/auth/me');
       if (res.ok) {
         const data = await res.json();
         setUser(data.user);
@@ -104,7 +107,7 @@ function AppContent() {
   // Fetch Active Session (RF03 / RF5.2)
   const fetchActiveSession = useCallback(async () => {
     try {
-      const res = await fetch('/api/sessions/active');
+      const res = await apiFetch('/api/sessions/active');
       if (res.ok) {
         const data = await res.json();
         setActiveSession(data.session);
@@ -117,7 +120,7 @@ function AppContent() {
   // Fetch All Sessions (RF06 & History)
   const fetchSessions = useCallback(async () => {
     try {
-      const res = await fetch('/api/sessions');
+      const res = await apiFetch('/api/sessions');
       if (res.ok) {
         const data = await res.json();
         setSessions(data.sessions || []);
@@ -130,7 +133,7 @@ function AppContent() {
   // Fetch Clients
   const fetchClients = useCallback(async () => {
     try {
-      const res = await fetch('/api/clients');
+      const res = await apiFetch('/api/clients');
       if (res.ok) {
         const data = await res.json();
         setClients(data.clients || []);
@@ -140,18 +143,24 @@ function AppContent() {
     }
   }, []);
 
-  // Initial Load
+  // Initial Load: check authentication
   useEffect(() => {
     async function init() {
       setLoading(true);
       await fetchAuthUser();
-      await fetchActiveSession();
-      await fetchSessions();
-      await fetchClients();
       setLoading(false);
     }
     init();
-  }, [fetchAuthUser, fetchActiveSession, fetchSessions, fetchClients]);
+  }, [fetchAuthUser]);
+
+  // Load app data only when user is authenticated
+  useEffect(() => {
+    if (user) {
+      fetchActiveSession();
+      fetchSessions();
+      fetchClients();
+    }
+  }, [user, fetchActiveSession, fetchSessions, fetchClients]);
 
   // Handler: Start Session (RF03)
   const handleStartSession = async (data: {
@@ -162,7 +171,7 @@ function AppContent() {
   }) => {
     try {
       setLoading(true);
-      const res = await fetch('/api/sessions/start', {
+      const res = await apiFetch('/api/sessions/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
@@ -192,12 +201,47 @@ function AppContent() {
     }
   };
 
+  // Handler: Update Session Title while running
+  const handleUpdateSessionTitle = async (sessionId: string, newTitle: string) => {
+    const trimmed = newTitle.trim() || 'Sessão de Trabalho';
+    try {
+      const res = await apiFetch(`/api/sessions/${sessionId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: trimmed }),
+      });
+
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || 'Erro ao atualizar título da sessão');
+      }
+
+      const resData = await res.json();
+      setActiveSession((prev) => (prev ? { ...prev, title: resData.session.title } : null));
+      addToast({
+        title: 'Título atualizado!',
+        description: `O título foi alterado para "${resData.session.title}".`,
+        variant: 'success',
+      });
+      fetchSessions();
+    } catch (err: any) {
+      addToast({
+        title: 'Erro ao alterar título',
+        description: err.message,
+        variant: 'destructive',
+      });
+      throw err;
+    }
+  };
+
   // Handler: Stop Session (RF03)
-  const handleStopSession = async (sessionId: string) => {
+  const handleStopSession = async (sessionId: string, newTitle?: string) => {
     try {
       setLoading(true);
-      const res = await fetch(`/api/sessions/${sessionId}/stop`, {
+      const res = await apiFetch(`/api/sessions/${sessionId}/stop`, {
         method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: newTitle }),
       });
 
       if (!res.ok) {
@@ -219,7 +263,7 @@ function AppContent() {
 
       addToast({
         title: 'Sessão Finalizada!',
-        description: `Duração: ${formatDurationHuman(durationMs)} (${decimalHours.toFixed(
+        description: `"${stoppedSession.title}" concluída. Duração: ${formatDurationHuman(durationMs)} (${decimalHours.toFixed(
           2
         )}h). Faturável: ${formatCurrency(billable)}.`,
         variant: 'success',
@@ -240,7 +284,7 @@ function AppContent() {
   // Handler: Add Task in Real-Time (RF05)
   const handleAddTask = async (sessionId: string, description: string) => {
     try {
-      const res = await fetch('/api/tasks', {
+      const res = await apiFetch('/api/tasks', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -285,7 +329,7 @@ function AppContent() {
   // Handler: Delete Task (RF5.3)
   const handleDeleteTask = async (taskId: string) => {
     try {
-      const res = await fetch(`/api/tasks/${taskId}`, {
+      const res = await apiFetch(`/api/tasks/${taskId}`, {
         method: 'DELETE',
       });
 
@@ -318,7 +362,7 @@ function AppContent() {
   // Handler: Delete Session
   const handleDeleteSession = async (sessionId: string) => {
     try {
-      const res = await fetch(`/api/sessions/${sessionId}`, {
+      const res = await apiFetch(`/api/sessions/${sessionId}`, {
         method: 'DELETE',
       });
       if (!res.ok) throw new Error('Erro ao excluir sessão');
@@ -350,7 +394,7 @@ function AppContent() {
   // Handler: Share single session
   const handleShareSession = async (sessionId: string) => {
     try {
-      const res = await fetch('/api/reports/share', {
+      const res = await apiFetch('/api/reports/share', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -379,7 +423,7 @@ function AppContent() {
   }) => {
     try {
       setLoading(true);
-      const res = await fetch('/api/auth/profile', {
+      const res = await apiFetch('/api/auth/profile', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
@@ -425,10 +469,33 @@ function AppContent() {
     );
   }
 
-  const hourlyRate = user?.default_hourly_rate || 150.0;
+  // Loading state
+  if (loading) {
+    return (
+      <div className="min-h-screen w-full flex flex-col items-center justify-center bg-neutral-50 dark:bg-neutral-950 text-neutral-600 dark:text-neutral-400">
+        <div className="w-10 h-10 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mb-4" />
+        <p className="text-sm font-medium">Carregando dados da sessão...</p>
+      </div>
+    );
+  }
+
+  // Force redirect to Login screen if not authenticated
+  if (!user) {
+    return (
+      <LoginView
+        onLoginSuccess={(loggedInUser, loggedInTenant) => {
+          setUser(loggedInUser);
+          setTenant(loggedInTenant);
+        }}
+      />
+    );
+  }
+
+  const hourlyRate = user.default_hourly_rate || 150.0;
 
   return (
     <div className="min-h-screen bg-neutral-50 dark:bg-neutral-950 text-neutral-900 dark:text-neutral-100 flex flex-col font-sans transition-colors">
+      <PWANotificationBanner />
       {/* Top Navigation */}
       <Navbar
         activeTab={activeTab}
@@ -443,31 +510,7 @@ function AppContent() {
 
       {/* Main Container */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 flex flex-col items-center justify-center">
-        {!user && !loading ? (
-          <div className="max-w-md w-full mx-auto my-12 p-8 bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-2xl shadow-sm text-center space-y-6">
-            <div className="w-14 h-14 bg-neutral-100 dark:bg-neutral-800 rounded-full flex items-center justify-center mx-auto text-neutral-800 dark:text-neutral-200">
-              <Lock className="w-7 h-7" />
-            </div>
-            <div className="space-y-2">
-              <h2 className="text-xl font-bold text-neutral-900 dark:text-neutral-100">
-                Sessão Encerrada / Autenticação Necessária
-              </h2>
-              <p className="text-sm text-neutral-500 dark:text-neutral-400">
-                Para acessar o cronômetro, relatórios, histórico e configurações do seu workspace multitenant, faça login na sua conta.
-              </p>
-            </div>
-            <Button
-              onClick={() => setAuthModalOpen(true)}
-              className="w-full bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 hover:bg-neutral-800 dark:hover:bg-neutral-200 font-semibold py-2.5 cursor-pointer shadow-sm"
-            >
-              <LogIn className="w-4 h-4 mr-2" />
-              Entrar ou Criar Conta
-            </Button>
-          </div>
-        ) : loading ? (
-          <div className="text-center py-20 text-neutral-500">Carregando dados da sessão...</div>
-        ) : (
-          <div className="w-full space-y-6">
+        <div className="w-full space-y-6">
             {activeTab === 'timer' && (
               <TimerView
                 activeSession={activeSession}
@@ -477,6 +520,7 @@ function AppContent() {
                 onClearResumeSession={() => setResumeSession(null)}
                 onStartSession={handleStartSession}
                 onStopSession={handleStopSession}
+                onUpdateSessionTitle={handleUpdateSessionTitle}
                 onAddTask={handleAddTask}
                 onDeleteTask={handleDeleteTask}
                 loading={loading}
@@ -537,7 +581,6 @@ function AppContent() {
               />
             )}
           </div>
-        )}
       </main>
 
       {/* Floating Quick AI Button (when not on assistant tab) */}
@@ -555,12 +598,9 @@ function AppContent() {
 
       {/* Footer */}
       <footer className="border-t border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 py-6 text-center text-xs text-neutral-500 dark:text-neutral-400">
-        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
+        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-center gap-2">
           <p>
-            Time Tracking &amp; Faturamento • Sistema Multitenant com SQLite e Sequelize
-          </p>
-          <p className="text-neutral-400 dark:text-neutral-500">
-            {tenant ? `Workspace: ${tenant.name}` : 'Ambiente Local'}
+            Time Tracking &amp; Faturamento
           </p>
         </div>
       </footer>

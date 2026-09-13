@@ -15,12 +15,15 @@ export function calculateSessionMetrics(session: any, hourlyRate: number) {
   const durationMs = Math.max(0, end - start);
   const durationMinutes = Math.round(durationMs / 60000);
   const decimalHours = Number((durationMs / 3600000).toFixed(2));
+  // O valor cobrável desta sessão é calculado com a taxa específica desta sessão/cliente
   const billableAmount = Number((decimalHours * hourlyRate).toFixed(2));
 
   return {
     durationMs,
     durationMinutes,
     decimalHours,
+    hourlyRate,
+    appliedHourlyRate: hourlyRate,
     billableAmount,
     isActive: !session.end_time,
   };
@@ -32,6 +35,13 @@ reportsRouter.get('/', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { startDate, endDate, sessionId, clientId } = req.query;
     const defaultHourlyRate = req.user?.default_hourly_rate ?? 150.0;
+
+    let selectedClient: Client | null = null;
+    if (clientId) {
+      selectedClient = await Client.findOne({
+        where: { id: clientId as string, tenant_id: req.tenantId! },
+      });
+    }
 
     const whereClause: any = {
       tenant_id: req.tenantId!,
@@ -81,13 +91,18 @@ reportsRouter.get('/', async (req: AuthenticatedRequest, res: Response) => {
     let totalDurationMs = 0;
     let totalTasksCount = 0;
     let totalBillableAmount = 0;
+    const appliedRatesSet = new Set<number>();
 
     const mappedSessions = sessions.map((sess) => {
-      const rate = sess.Client?.hourly_rate ?? defaultHourlyRate;
-      const metrics = calculateSessionMetrics(sess, rate);
+      // Prioridade: Taxa personalizada do cliente da sessão -> Taxa padrão do perfil
+      const sessionRate = sess.Client?.hourly_rate ?? defaultHourlyRate;
+      appliedRatesSet.add(sessionRate);
+
+      const metrics = calculateSessionMetrics(sess, sessionRate);
       totalDurationMs += metrics.durationMs;
       totalTasksCount += sess.Tasks ? sess.Tasks.length : 0;
-      totalBillableAmount += metrics.billableAmount;
+      // O valor final do relatório é SEMPRE o somatório exato de cada sessão individual
+      totalBillableAmount = Number((totalBillableAmount + metrics.billableAmount).toFixed(2));
 
       return {
         id: sess.id,
@@ -107,6 +122,11 @@ reportsRouter.get('/', async (req: AuthenticatedRequest, res: Response) => {
     const totalDecimalHours = Number((totalDurationMs / 3600000).toFixed(2));
     totalBillableAmount = Number(totalBillableAmount.toFixed(2));
     const totalMinutes = Math.round(totalDurationMs / 60000);
+
+    const hasMultipleRates = appliedRatesSet.size > 1;
+    const effectiveHourlyRate = selectedClient
+      ? (selectedClient.hourly_rate ?? defaultHourlyRate)
+      : (appliedRatesSet.size === 1 ? Array.from(appliedRatesSet)[0] : defaultHourlyRate);
 
     // Grouping by Date (YYYY-MM-DD)
     const groupedByDay: Record<string, { date: string; decimalHours: number; billableAmount: number; sessionsCount: number }> = {};
@@ -134,11 +154,20 @@ reportsRouter.get('/', async (req: AuthenticatedRequest, res: Response) => {
         totalDurationMs,
         totalMinutes,
         totalDecimalHours,
-        hourlyRate: defaultHourlyRate,
+        hourlyRate: effectiveHourlyRate,
+        defaultHourlyRate,
+        hasMultipleRates,
         totalBillableAmount,
         totalSessionsCount: mappedSessions.length,
         totalTasksCount,
         currency: 'BRL',
+        selectedClient: selectedClient
+          ? {
+              id: selectedClient.id,
+              name: selectedClient.name,
+              hourlyRate: selectedClient.hourly_rate ?? defaultHourlyRate,
+            }
+          : null,
       },
       groupedByDay: Object.values(groupedByDay).sort((a, b) => b.date.localeCompare(a.date)),
       sessions: mappedSessions,
@@ -153,8 +182,18 @@ reportsRouter.get('/', async (req: AuthenticatedRequest, res: Response) => {
 // Gera e salva um public_token para um conjunto de dados ou sessão específica.
 reportsRouter.post('/share', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { title, start_date, end_date, session_id } = req.body;
-    const hourlyRate = req.user?.default_hourly_rate ?? 150.0;
+    const { title, start_date, end_date, session_id, client_id, include_cost, allow_approval } = req.body;
+    const defaultHourlyRate = req.user?.default_hourly_rate ?? 150.0;
+
+    let shareHourlyRate = defaultHourlyRate;
+    if (client_id) {
+      const client = await Client.findOne({
+        where: { id: client_id, tenant_id: req.tenantId! },
+      });
+      if (client?.hourly_rate) {
+        shareHourlyRate = client.hourly_rate;
+      }
+    }
 
     const token = crypto.randomBytes(16).toString('hex');
     const approvalCode = crypto.randomBytes(3).toString('hex').toUpperCase();
@@ -166,7 +205,10 @@ reportsRouter.post('/share', async (req: AuthenticatedRequest, res: Response) =>
       start_date: start_date || null,
       end_date: end_date || null,
       session_id: session_id || null,
-      hourly_rate: hourlyRate,
+      client_id: client_id || null,
+      hourly_rate: shareHourlyRate,
+      include_cost: include_cost !== undefined ? Boolean(include_cost) : true,
+      allow_approval: allow_approval !== undefined ? Boolean(allow_approval) : true,
       approval_code: approvalCode,
       status: 'pending',
     });

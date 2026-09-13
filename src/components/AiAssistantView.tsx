@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 import React, { useState, useEffect, useRef } from 'react';
 import Markdown from 'react-markdown';
 import {
@@ -26,6 +27,7 @@ import {
 import { User, Tenant, TimeSession, AiChatMessage, AiImageAttachment, AiStep } from '../types';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
+import { apiFetch } from '../utils/api';
 
 interface AiAssistantViewProps {
   user: User | null;
@@ -68,10 +70,28 @@ export function AiAssistantView({
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [providerInfo, setProviderInfo] = useState<ProviderInfo | null>(null);
+  const [loadingStepText, setLoadingStepText] = useState('Pensando...');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (!loading) return;
+    const steps = [
+      'Pensando...',
+      'Analisando contexto...',
+      'Verificando próximos passos...',
+      'Executando ações...',
+      'Quase pronto...',
+    ];
+    let i = 0;
+    const interval = setInterval(() => {
+      i = (i + 1) % steps.length;
+      setLoadingStepText(steps[i]);
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [loading]);
 
   // Auto-scroll to bottom of conversation
   const scrollToBottom = () => {
@@ -85,7 +105,7 @@ export function AiAssistantView({
   // Load provider information
   const fetchProviderInfo = async () => {
     try {
-      const res = await fetch('/api/ai/provider');
+      const res = await apiFetch('/api/ai/provider');
       if (res.ok) {
         const data = await res.json();
         setProviderInfo(data);
@@ -99,7 +119,7 @@ export function AiAssistantView({
   const fetchMessages = async () => {
     try {
       setLoadingHistory(true);
-      const res = await fetch('/api/ai/messages');
+      const res = await apiFetch('/api/ai/messages');
       if (res.ok) {
         const data = await res.json();
         setMessages(data.messages || []);
@@ -119,7 +139,7 @@ export function AiAssistantView({
   // Clear conversation history
   const handleClearHistory = async () => {
     try {
-      const res = await fetch('/api/ai/messages', { method: 'DELETE' });
+      const res = await apiFetch('/api/ai/messages', { method: 'DELETE' });
       if (res.ok) {
         setMessages([]);
       }
@@ -199,7 +219,7 @@ export function AiAssistantView({
     setLoading(true);
 
     try {
-      const res = await fetch('/api/ai/chat', {
+      const res = await apiFetch('/api/ai/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -315,9 +335,6 @@ export function AiAssistantView({
               <h2 className="text-sm font-bold text-neutral-900 dark:text-neutral-100">
                 Cronos AI
               </h2>
-              <Badge variant="outline" className="text-[10px] px-1.5 py-0 font-medium">
-                Multi-Tenant • 60 Steps
-              </Badge>
             </div>
             <p className="text-xs text-neutral-500 dark:text-neutral-400">
               Controle o cronômetro, analise imagens e consulte histórico via linguagem natural
@@ -325,83 +342,8 @@ export function AiAssistantView({
           </div>
         </div>
 
-        {/* Model Selector & Actions */}
+        {/* Actions */}
         <div className="flex items-center gap-2">
-          {/* Active Provider Badge or Gemini Model Selector */}
-          {providerInfo?.activeProvider === 'kilo' ? (
-            <div className="flex items-center gap-2 px-2.5 py-1 bg-violet-50 dark:bg-violet-950/40 border border-violet-200 dark:border-violet-850 rounded-lg text-xs text-violet-800 dark:text-violet-300 shadow-2xs">
-              <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-              <span className="font-bold">Kilo Gateway</span>
-              <span className="text-neutral-300 dark:text-neutral-600">•</span>
-              <span
-                className="font-mono text-[11px] max-w-[130px] sm:max-w-[190px] truncate"
-                title={providerInfo.kilo.model || 'Secret KILO_MODEL não definida'}
-              >
-                {providerInfo.kilo.model || 'Defina KILO_MODEL'}
-              </span>
-              <a
-                href="https://kilo.ai/docs/gateway"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-[10px] underline text-violet-600 dark:text-violet-400 hover:text-violet-800 ml-0.5"
-                title="Ver documentação do Kilo AI Gateway"
-              >
-                Docs
-              </a>
-            </div>
-          ) : (
-            <div className="flex items-center bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg p-0.5 text-xs">
-              <button
-                onClick={() => setSelectedModel('gemini-3.5-flash')}
-                className={`px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer ${
-                  selectedModel === 'gemini-3.5-flash'
-                    ? 'bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 shadow-2xs'
-                    : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-200'
-                }`}
-                title="Equilibrado, inteligente e ágil (Recomendado)"
-              >
-                Flash 3.5
-              </button>
-              <button
-                onClick={() => setSelectedModel('gemini-3.1-flash-lite')}
-                className={`px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer ${
-                  selectedModel === 'gemini-3.1-flash-lite'
-                    ? 'bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 shadow-2xs'
-                    : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-200'
-                }`}
-                title="Respostas ultra rápidas para comandos do dia a dia"
-              >
-                Flash Lite
-              </button>
-              <button
-                onClick={() => setSelectedModel('gemini-3.1-pro-preview')}
-                className={`px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer ${
-                  selectedModel === 'gemini-3.1-pro-preview'
-                    ? 'bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 shadow-2xs'
-                    : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-200'
-                }`}
-                title="Raciocínio profundo para planejamento e análises complexas"
-              >
-                Pro 3.1
-              </button>
-            </div>
-          )}
-
-          {/* Max Steps Selector (up to 60) */}
-          <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-lg text-xs text-neutral-600 dark:text-neutral-300">
-            <Layers className="w-3.5 h-3.5 text-neutral-400" />
-            <span>Até</span>
-            <select
-              value={maxSteps}
-              onChange={(e) => setMaxSteps(Number(e.target.value))}
-              className="bg-transparent font-semibold text-neutral-900 dark:text-neutral-100 focus:outline-none cursor-pointer"
-            >
-              <option value={15}>15 steps</option>
-              <option value={30}>30 steps</option>
-              <option value={60}>60 steps (Máx)</option>
-            </select>
-          </div>
-
           {/* Clear Button */}
           {messages.length > 0 && (
             <button
@@ -415,46 +357,6 @@ export function AiAssistantView({
           )}
         </div>
       </div>
-
-      {/* Alert banner if KILO_API_KEY is present but KILO_MODEL is not set yet */}
-      {providerInfo?.kilo?.isConfigured && !providerInfo?.kilo?.hasModelSecret && (
-        <div className="bg-amber-50 dark:bg-amber-950/40 border-b border-amber-200 dark:border-amber-850 px-4 py-2 text-xs text-amber-800 dark:text-amber-300 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-            <span>
-              <strong>Kilo AI Gateway detectado:</strong> A chave <code>KILO_API_KEY</code> está configurada. Para ativar, defina a secret <code>KILO_MODEL</code> (ex: <code>anthropic/claude-3-5-sonnet</code> ou <code>openai/gpt-4o</code>) no painel de Secrets ou no arquivo <code>.env</code>.
-            </span>
-          </div>
-          <a
-            href="https://kilo.ai/docs/gateway"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline font-semibold ml-2 shrink-0 text-amber-900 dark:text-amber-200 hover:opacity-80"
-          >
-            Docs Gateway
-          </a>
-        </div>
-      )}
-
-      {/* Notice banner if no AI provider is configured yet */}
-      {providerInfo && providerInfo.activeProvider === 'none' && (
-        <div className="bg-blue-50 dark:bg-blue-950/40 border-b border-blue-200 dark:border-blue-850 px-4 py-2.5 text-xs text-blue-850 dark:text-blue-300 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 text-blue-600 shrink-0" />
-            <span>
-              <strong>Integração Kilo AI Gateway:</strong> Biblioteca OpenAI compatível pronta para uso. Adicione as secrets <code>KILO_API_KEY</code> e <code>KILO_MODEL</code> nas Secrets ou no <code>.env</code>.
-            </span>
-          </div>
-          <a
-            href="https://kilo.ai/docs/gateway"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline font-semibold ml-2 shrink-0 text-blue-900 dark:text-blue-200 hover:opacity-80"
-          >
-            https://kilo.ai/docs/gateway
-          </a>
-        </div>
-      )}
 
       {/* Active Session Status Banner */}
       {activeSession ? (
@@ -607,7 +509,7 @@ export function AiAssistantView({
                   )}
 
                   {/* Function Calling Execution Steps (Tools executed by Gemini) */}
-                  {msg.steps && msg.steps.length > 0 && (
+                  {import.meta.env.VITE_SHOW_AI_STEPS === 'true' && msg.steps && msg.steps.length > 0 && (
                     <div className="mb-2 space-y-1.5">
                       <div className="flex items-center gap-1.5 text-xs font-semibold text-indigo-600 dark:text-indigo-400">
                         <Cpu className="w-3.5 h-3.5" />
@@ -715,14 +617,7 @@ export function AiAssistantView({
                   {/* Message Footer: Actions & Copy */}
                   {!isUser && (
                     <div className="flex items-center justify-between pt-1 border-t border-neutral-200/50 dark:border-neutral-700/40 text-[10px] text-neutral-400">
-                      <div className="flex items-center gap-1.5">
-                        <span>Cronos AI</span>
-                        {msg.provider === 'kilo' ? (
-                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-violet-100 dark:bg-violet-950/60 text-violet-700 dark:text-violet-300 rounded font-medium text-[9px]">
-                            ⚡ Kilo Gateway{msg.model ? ` • ${msg.model}` : ''}
-                          </span>
-                        ) : null}
-                      </div>
+                      <span>Cronos AI</span>
                       <button
                         onClick={() => copyToClipboard(msg.content, msg.id)}
                         className="flex items-center gap-1 hover:text-neutral-600 dark:hover:text-neutral-200 transition-colors cursor-pointer"
@@ -748,7 +643,7 @@ export function AiAssistantView({
           })
         )}
 
-        {/* Pending state while agentic loop / Gemini runs */}
+        {/* Pending state while agentic loop runs */}
         {loading && (
           <div className="flex gap-3 max-w-3xl mr-auto">
             <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-600 text-white shadow-xs animate-pulse">
@@ -757,7 +652,7 @@ export function AiAssistantView({
             <div className="rounded-2xl rounded-tl-xs p-4 bg-neutral-50 dark:bg-neutral-850 border border-neutral-200 dark:border-neutral-800 space-y-2">
               <div className="flex items-center gap-2 text-xs font-semibold text-indigo-600 dark:text-indigo-400">
                 <Cpu className="w-4 h-4 animate-spin" />
-                <span>Processando com Gemini e executando ferramentas (até {maxSteps} steps)...</span>
+                <span>{loadingStepText}</span>
               </div>
               <div className="flex space-x-1.5 pt-1">
                 <div className="w-2 h-2 rounded-full bg-indigo-500 animate-bounce" style={{ animationDelay: '0ms' }} />
@@ -860,7 +755,6 @@ export function AiAssistantView({
         {/* Drag & Paste helper info */}
         <div className="flex items-center justify-between mt-2 px-1 text-[11px] text-neutral-400 dark:text-neutral-500">
           <span>Dica: Cole capturas de tela diretamente com Ctrl+V ou arraste imagens aqui.</span>
-          <span className="hidden sm:inline">Suporta até 60 steps automáticos</span>
         </div>
       </div>
     </div>

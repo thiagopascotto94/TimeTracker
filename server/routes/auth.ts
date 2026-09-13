@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import { User, Tenant } from '../db';
 import { authMiddleware, AuthenticatedRequest } from '../auth';
+import { generateToken } from '../jwt';
 
 export const authRouter = Router();
 
@@ -23,6 +24,16 @@ authRouter.post('/login', async (req, res) => {
       return res.status(401).json({ error: 'Credenciais inválidas' });
     }
 
+    const token = generateToken(user.id, user.tenant_id);
+
+    // Set cookie
+    res.cookie('token', token, {
+      httpOnly: true,
+      secure: false,
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+      sameSite: 'lax',
+    });
+
     if (req.session) {
       req.session.userId = user.id;
       req.session.tenantId = user.tenant_id;
@@ -31,6 +42,7 @@ authRouter.post('/login', async (req, res) => {
     const tenant = await Tenant.findByPk(user.tenant_id);
 
     return res.json({
+      token,
       user: {
         id: user.id,
         tenant_id: user.tenant_id,
@@ -74,12 +86,22 @@ authRouter.post('/register', async (req, res) => {
       default_hourly_rate: Number(default_hourly_rate) || 150.0,
     });
 
+    const token = generateToken(user.id, tenant.id);
+
+    res.cookie('token', token, {
+      httpOnly: true,
+      secure: false,
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+      sameSite: 'lax',
+    });
+
     if (req.session) {
       req.session.userId = user.id;
       req.session.tenantId = tenant.id;
     }
 
     res.status(201).json({
+      token,
       user: {
         id: user.id,
         tenant_id: user.tenant_id,
@@ -100,7 +122,10 @@ authRouter.get('/me', authMiddleware, async (req: AuthenticatedRequest, res: Res
   try {
     const user = req.user!;
     const tenant = req.tenant!;
+    const token = generateToken(user.id, tenant.id);
+
     return res.json({
+      token,
       user: {
         id: user.id,
         tenant_id: user.tenant_id,
@@ -152,6 +177,7 @@ authRouter.put('/profile', authMiddleware, async (req: AuthenticatedRequest, res
 
 // POST /api/auth/logout
 authRouter.post('/logout', (req, res) => {
+  res.clearCookie('token');
   if (req.session) {
     req.session.destroy(() => {
       res.json({ message: 'Sessão encerrada com sucesso' });

@@ -1,4 +1,4 @@
-import { Sequelize, DataTypes, Model, Optional } from 'sequelize';
+import { Sequelize, DataTypes, Model } from 'sequelize';
 import path from 'path';
 import fs from 'fs';
 import bcrypt from 'bcryptjs';
@@ -298,7 +298,10 @@ export interface SharedReportAttributes {
   start_date?: string | null;
   end_date?: string | null;
   session_id?: string | null;
+  client_id?: string | null;
   hourly_rate: number;
+  include_cost?: boolean;
+  allow_approval?: boolean;
   approval_code?: string;
   status?: string;
   approved_by?: string | null;
@@ -313,12 +316,16 @@ export class SharedReport extends Model<SharedReportAttributes> implements Share
   public start_date!: string | null;
   public end_date!: string | null;
   public session_id!: string | null;
+  public client_id!: string | null;
   public hourly_rate!: number;
+  public include_cost!: boolean;
+  public allow_approval!: boolean;
   public approval_code!: string;
   public status!: string;
   public approved_by!: string | null;
   public approved_at!: Date | null;
   public approval_ip!: string | null;
+  public readonly Client?: Client | null;
 }
 SharedReport.init(
   {
@@ -353,10 +360,24 @@ SharedReport.init(
       type: DataTypes.STRING,
       allowNull: true,
     },
+    client_id: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
     hourly_rate: {
       type: DataTypes.FLOAT,
       allowNull: false,
       defaultValue: 150.0,
+    },
+    include_cost: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: true,
+    },
+    allow_approval: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: true,
     },
     approval_code: {
       type: DataTypes.STRING,
@@ -410,6 +431,9 @@ Tenant.hasMany(Task, { foreignKey: 'tenant_id' });
 Task.belongsTo(Tenant, { foreignKey: 'tenant_id' });
 
 Tenant.hasMany(SharedReport, { foreignKey: 'tenant_id' });
+SharedReport.belongsTo(Tenant, { foreignKey: 'tenant_id' });
+Client.hasMany(SharedReport, { foreignKey: 'client_id' });
+SharedReport.belongsTo(Client, { foreignKey: 'client_id', as: 'Client' });
 
 Tenant.hasMany(Client, { foreignKey: 'tenant_id' });
 Client.belongsTo(Tenant, { foreignKey: 'tenant_id' });
@@ -497,12 +521,31 @@ export async function initDb() {
 
   // Safe synchronization for SQLite (creates tables if they do not exist)
   await sequelize.sync();
-  await sequelize.query("ALTER TABLE shared_reports ADD COLUMN approval_code VARCHAR(255) DEFAULT 'APPR-1234';").catch(() => {});
-  await sequelize.query("ALTER TABLE shared_reports ADD COLUMN status VARCHAR(50) DEFAULT 'pending';").catch(() => {});
-  await sequelize.query("ALTER TABLE shared_reports ADD COLUMN approved_by VARCHAR(255);").catch(() => {});
-  await sequelize.query("ALTER TABLE shared_reports ADD COLUMN approved_at DATETIME;").catch(() => {});
-  await sequelize.query("ALTER TABLE shared_reports ADD COLUMN approval_ip VARCHAR(255);").catch(() => {});
-  await sequelize.query("ALTER TABLE time_sessions ADD COLUMN client_id VARCHAR(255);").catch(() => {});
+
+  // Helper to ensure a column exists in a SQLite table
+  const addColumnIfNotExists = async (table: string, column: string, definition: string) => {
+    try {
+      const [columns] = (await sequelize.query(`PRAGMA table_info(${table});`)) as [Array<{ name: string }>, any];
+      const exists = columns.some((c) => c.name === column);
+      if (!exists) {
+        await sequelize.query(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition};`);
+        console.log(`Added column ${column} to table ${table}`);
+      }
+    } catch (e) {
+      console.warn(`Could not add column ${column} to table ${table}:`, e);
+    }
+  };
+
+  await addColumnIfNotExists('shared_reports', 'include_cost', 'BOOLEAN DEFAULT 1');
+  await addColumnIfNotExists('shared_reports', 'allow_approval', 'BOOLEAN DEFAULT 1');
+  await addColumnIfNotExists('shared_reports', 'approval_code', "VARCHAR(255) DEFAULT 'APPR-1234'");
+  await addColumnIfNotExists('shared_reports', 'status', "VARCHAR(50) DEFAULT 'pending'");
+  await addColumnIfNotExists('shared_reports', 'approved_by', 'VARCHAR(255)');
+  await addColumnIfNotExists('shared_reports', 'approved_at', 'DATETIME');
+  await addColumnIfNotExists('shared_reports', 'approval_ip', 'VARCHAR(255)');
+  await addColumnIfNotExists('shared_reports', 'client_id', 'VARCHAR(255)');
+  await addColumnIfNotExists('time_sessions', 'client_id', 'VARCHAR(255)');
+  await addColumnIfNotExists('time_sessions', 'public_token', 'VARCHAR(255)');
 
   // Ensure default tenant exists
   let defaultTenant = await Tenant.findOne();

@@ -59,6 +59,8 @@ export interface TimeSession {
     durationMs: number;
     durationMinutes: number;
     decimalHours: number;
+    hourlyRate?: number;
+    appliedHourlyRate?: number;
     billableAmount: number;
     isActive: boolean;
   };
@@ -69,10 +71,17 @@ export interface ReportSummary {
   totalMinutes: number;
   totalDecimalHours: number;
   hourlyRate: number;
+  defaultHourlyRate?: number;
+  hasMultipleRates?: boolean;
   totalBillableAmount: number;
   totalSessionsCount: number;
   totalTasksCount: number;
   currency: string;
+  selectedClient?: {
+    id: string;
+    name: string;
+    hourlyRate: number;
+  } | null;
 }
 
 export interface DayGroup {
@@ -96,6 +105,8 @@ export interface PublicSharedReport {
   approved_by?: string | null;
   approved_at?: string | null;
   approval_ip?: string | null;
+  include_cost: boolean;
+  allow_approval: boolean;
   summary: ReportSummary;
   sessions: {
     id: string;
@@ -103,6 +114,11 @@ export interface PublicSharedReport {
     start_time: string;
     end_time?: string | null;
     target_minutes?: number | null;
+    client?: {
+      id: string;
+      name: string;
+      hourly_rate?: number | null;
+    } | null;
     tasks: {
       id: string;
       description: string;
@@ -112,6 +128,8 @@ export interface PublicSharedReport {
       durationMs: number;
       durationMinutes: number;
       decimalHours: number;
+      hourlyRate?: number;
+      appliedHourlyRate?: number;
       billableAmount: number;
       isActive: boolean;
     };

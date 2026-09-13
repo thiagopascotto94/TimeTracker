@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { User, Tenant } from './db';
+import { verifyToken } from './jwt';
 
 // Extend Express Session
 declare module 'express-session' {
@@ -22,29 +23,42 @@ export async function authMiddleware(
   next: NextFunction
 ) {
   try {
-    let userId = req.session?.userId;
-    let tenantId = req.session?.tenantId;
+    let userId: string | undefined;
+    let tenantId: string | undefined;
 
-    // Check custom headers if provided (e.g. API clients or switcher)
+    // 1. Check Authorization header (Bearer token)
+    const authHeader = req.headers['authorization'];
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const token = authHeader.substring(7);
+      const decoded = verifyToken(token);
+      if (decoded) {
+        userId = decoded.userId;
+        tenantId = decoded.tenantId;
+      }
+    }
+
+    // 2. Check cookie token
+    if (!userId && req.cookies && req.cookies.token) {
+      const decoded = verifyToken(req.cookies.token);
+      if (decoded) {
+        userId = decoded.userId;
+        tenantId = decoded.tenantId;
+      }
+    }
+
+    // 3. Check session fallback
+    if (!userId && req.session) {
+      userId = req.session.userId;
+      tenantId = req.session.tenantId;
+    }
+
+    // 4. Check custom x-user-id header
     if (!userId && req.headers['x-user-id']) {
       userId = req.headers['x-user-id'] as string;
     }
 
-    // Default auto-login to first seeded user if session is empty (ensures instant zero-friction preview)
     if (!userId) {
-      const defaultUser = await User.findOne();
-      if (defaultUser) {
-        userId = defaultUser.id;
-        tenantId = defaultUser.tenant_id;
-        if (req.session) {
-          req.session.userId = userId;
-          req.session.tenantId = tenantId;
-        }
-      }
-    }
-
-    if (!userId) {
-      return res.status(401).json({ error: 'Não autenticado' });
+      return res.status(401).json({ error: 'Sessão expirada ou não autenticada' });
     }
 
     const user = await User.findByPk(userId);
@@ -54,7 +68,7 @@ export async function authMiddleware(
 
     const tenant = await Tenant.findByPk(tenantId || user.tenant_id);
     if (!tenant) {
-      return res.status(401).json({ error: 'Tenant inválido' });
+      return res.status(401).json({ error: 'Organização (Tenant) inválida' });
     }
 
     req.user = user;

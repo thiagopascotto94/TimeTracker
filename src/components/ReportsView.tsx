@@ -30,6 +30,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './ui/
 import { Badge } from './ui/badge';
 import { Dialog } from './ui/dialog';
 import { useToast } from './ui/toast';
+import { ClientFilterAutocomplete } from './ClientFilterAutocomplete';
+import { apiFetch } from '../utils/api';
 
 interface ReportsViewProps {
   hourlyRate: number;
@@ -54,11 +56,14 @@ export function ReportsView({ hourlyRate, clients, onOpenPublicShare }: ReportsV
   // Share Dialog state
   const [shareDialogOpen, setShareDialogOpen] = useState<boolean>(false);
   const [shareTitle, setShareTitle] = useState<string>('Relatório de Horas & Faturamento');
+  const [includeCost, setIncludeCost] = useState<boolean>(true);
+  const [allowApproval, setAllowApproval] = useState<boolean>(true);
   const [selectedSessionIdForShare, setSelectedSessionIdForShare] = useState<string>('');
   const [generatedShareToken, setGeneratedShareToken] = useState<string | null>(null);
   const [generatedApprovalCode, setGeneratedApprovalCode] = useState<string | null>(null);
   const [shareLoading, setShareLoading] = useState<boolean>(false);
   const [copied, setCopied] = useState<boolean>(false);
+  const [approvalCopied, setApprovalCopied] = useState<boolean>(false);
 
   // Fetch report data
   const fetchReport = async () => {
@@ -69,7 +74,7 @@ export function ReportsView({ hourlyRate, clients, onOpenPublicShare }: ReportsV
       if (endDate) params.append('endDate', endDate);
       if (clientId) params.append('clientId', clientId);
 
-      const res = await fetch(`/api/reports?${params.toString()}`);
+      const res = await apiFetch(`/api/reports?${params.toString()}`);
       if (!res.ok) throw new Error('Falha ao obter relatório');
       const data = await res.json();
       setReportData(data);
@@ -122,9 +127,12 @@ export function ReportsView({ hourlyRate, clients, onOpenPublicShare }: ReportsV
         start_date: startDate || null,
         end_date: endDate || null,
         session_id: selectedSessionIdForShare || null,
+        client_id: clientId || null,
+        include_cost: includeCost,
+        allow_approval: allowApproval,
       };
 
-      const res = await fetch('/api/reports/share', {
+      const res = await apiFetch('/api/reports/share', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -163,6 +171,18 @@ export function ReportsView({ hourlyRate, clients, onOpenPublicShare }: ReportsV
     addToast({
       title: 'Link copiado!',
       description: 'Copiado para a área de transferência.',
+      variant: 'default',
+    });
+  };
+
+  const copyApprovalCode = () => {
+    if (!generatedApprovalCode) return;
+    navigator.clipboard.writeText(generatedApprovalCode);
+    setApprovalCopied(true);
+    setTimeout(() => setApprovalCopied(false), 3000);
+    addToast({
+      title: 'Código copiado!',
+      description: 'Código de aprovação copiado para a área de transferência.',
       variant: 'default',
     });
   };
@@ -231,18 +251,13 @@ export function ReportsView({ hourlyRate, clients, onOpenPublicShare }: ReportsV
                 <Briefcase className="w-3.5 h-3.5" />
                 Cliente:
               </span>
-              <select
-                value={clientId}
-                onChange={(e) => setClientId(e.target.value)}
-                className="text-xs rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-850 px-2.5 py-1 text-neutral-800 dark:text-neutral-200 focus:outline-none focus:ring-1 focus:ring-neutral-400"
-              >
-                <option value="">Todos os Clientes</option>
-                {clients.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
+              <ClientFilterAutocomplete
+                clients={clients}
+                selectedClientId={clientId}
+                onSelectClient={setClientId}
+                allLabel="Todos os Clientes"
+                allValue=""
+              />
             </div>
 
             {/* Custom Dates */}
@@ -310,25 +325,43 @@ export function ReportsView({ hourlyRate, clients, onOpenPublicShare }: ReportsV
                 {formatCurrency(reportData.summary.totalBillableAmount)}
               </div>
               <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
-                {reportData.summary.totalDecimalHours.toFixed(2)}h × {formatCurrency(reportData.summary.hourlyRate)}/h
+                {reportData.summary.hasMultipleRates ? (
+                  <span>Soma exata das sessões por cliente/taxa</span>
+                ) : (
+                  <span>
+                    {reportData.summary.totalDecimalHours.toFixed(2)}h × {formatCurrency(reportData.summary.hourlyRate)}/h
+                  </span>
+                )}
               </p>
             </CardContent>
           </Card>
 
-          {/* Card 3: Valor por Hora Base */}
+          {/* Card 3: Valor por Hora */}
           <Card className="border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shadow-2xs">
             <CardContent className="p-5">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider">
-                  Taxa Horária Base
+                  {reportData.summary.selectedClient
+                    ? 'Taxa do Cliente'
+                    : reportData.summary.hasMultipleRates
+                    ? 'Taxas por Cliente'
+                    : 'Taxa Horária Aplicada'}
                 </span>
                 <Building2 className="w-4 h-4 text-neutral-400" />
               </div>
               <div className="mt-2 text-2xl font-bold text-neutral-900 dark:text-neutral-100 font-mono">
-                {formatCurrency(reportData.summary.hourlyRate)}
+                {reportData.summary.hasMultipleRates && !reportData.summary.selectedClient ? (
+                  <span className="text-lg">Por Sessão</span>
+                ) : (
+                  formatCurrency(reportData.summary.hourlyRate)
+                )}
               </div>
               <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
-                Configurado no perfil do usuário
+                {reportData.summary.selectedClient
+                  ? `Cliente: ${reportData.summary.selectedClient.name}`
+                  : reportData.summary.hasMultipleRates
+                  ? `Taxa base: ${formatCurrency(reportData.summary.defaultHourlyRate ?? reportData.summary.hourlyRate)}/h`
+                  : 'Taxa uniforme para as sessões'}
               </p>
             </CardContent>
           </Card>
@@ -442,8 +475,13 @@ export function ReportsView({ hourlyRate, clients, onOpenPublicShare }: ReportsV
                               ({formatDurationHuman(metrics.durationMs)})
                             </span>
                           </div>
-                          <div className="text-xs font-mono font-semibold text-emerald-700 dark:text-emerald-400">
-                            {formatCurrency(metrics.billableAmount)}
+                          <div className="flex items-center justify-end gap-1.5 mt-0.5">
+                            <span className="text-2xs font-mono text-neutral-500 dark:text-neutral-400">
+                              @{formatCurrency(metrics.appliedHourlyRate ?? metrics.hourlyRate ?? (sess.Client?.hourly_rate ?? reportData.summary.hourlyRate))}/h =
+                            </span>
+                            <span className="text-xs font-mono font-bold text-emerald-700 dark:text-emerald-400">
+                              {formatCurrency(metrics.billableAmount)}
+                            </span>
                           </div>
                         </div>
 
@@ -525,15 +563,24 @@ export function ReportsView({ hourlyRate, clients, onOpenPublicShare }: ReportsV
                 <label className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
                   Escopo do Compartilhamento
                 </label>
-                <div className="rounded-lg border border-neutral-200 dark:border-neutral-750 bg-neutral-50 dark:bg-neutral-850 p-3 text-xs text-neutral-600 dark:text-neutral-300 space-y-1">
+                <div className="rounded-lg border border-neutral-200 dark:border-neutral-750 bg-neutral-50 dark:bg-neutral-850 p-3 text-xs text-neutral-600 dark:text-neutral-300 space-y-2">
                   <p>
                     <strong>Filtro Atual:</strong>{' '}
                     {startDate || endDate
                       ? `De ${startDate || 'Início'} até ${endDate || 'Hoje'}`
                       : 'Todo o histórico de trabalho'}
                   </p>
-                  <p>
-                    <strong>Taxa Horária Aplicada:</strong> {formatCurrency(hourlyRate)}/h
+                  {clientId ? (
+                    <p>
+                      <strong>Cliente Filtrado:</strong> {clients.find((c) => c.id === clientId)?.name || 'Selecionado'} (Taxa: {formatCurrency(reportData?.summary?.hourlyRate ?? hourlyRate)}/h)
+                    </p>
+                  ) : (
+                    <p>
+                      <strong>Cálculo:</strong> Baseado nas taxas individuais por sessão/cliente ({reportData?.summary?.hasMultipleRates ? 'múltiplas taxas aplicadas' : `taxa base ${formatCurrency(hourlyRate)}/h`})
+                    </p>
+                  )}
+                  <p className="text-emerald-700 dark:text-emerald-400 font-medium">
+                    <strong>Total a Faturar:</strong> {formatCurrency(reportData?.summary?.totalBillableAmount ?? 0)}
                   </p>
                 </div>
               </div>
@@ -596,6 +643,40 @@ export function ReportsView({ hourlyRate, clients, onOpenPublicShare }: ReportsV
                   </Button>
                 </div>
               </div>
+
+              {generatedApprovalCode && (
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                    Código de Aprovação (Enviar para o cliente):
+                  </label>
+                  <div className="flex gap-2">
+                    <Input
+                      readOnly
+                      value={generatedApprovalCode}
+                      className="text-xs font-mono font-bold tracking-wider text-indigo-600 dark:text-indigo-400 bg-neutral-50 dark:bg-neutral-850"
+                    />
+                    <Button
+                      onClick={copyApprovalCode}
+                      className="shrink-0 gap-1 text-xs cursor-pointer"
+                    >
+                      {approvalCopied ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-emerald-400" />
+                          <span style={{ color: '#000000' }}>Copiado!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5" />
+                          <span style={{ color: '#000000' }}>Copiar Código</span>
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                  <p className="text-2xs text-neutral-500 dark:text-neutral-400">
+                    O cliente precisará digitar este código na página pública para aprovar ou rejeitar os apontamentos.
+                  </p>
+                </div>
+              )}
 
 
 

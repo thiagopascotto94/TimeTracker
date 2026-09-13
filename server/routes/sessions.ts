@@ -143,11 +143,12 @@ sessionsRouter.post('/start', async (req: AuthenticatedRequest, res: Response) =
   }
 });
 
-// PUT /api/sessions/:id/stop
-// Finaliza a sessão, preenchendo o end_time.
-sessionsRouter.put('/:id/stop', async (req: AuthenticatedRequest, res: Response) => {
+// PATCH /api/sessions/:id
+// Permite atualizar dados da sessão em andamento, como o título
+sessionsRouter.patch('/:id', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id } = req.params;
+    const { title, client_id, target_minutes } = req.body;
 
     const session = await TimeSession.findOne({
       where: {
@@ -155,7 +156,57 @@ sessionsRouter.put('/:id/stop', async (req: AuthenticatedRequest, res: Response)
         tenant_id: req.tenantId!,
         user_id: req.userId!,
       },
-      include: [{ model: Task, as: 'Tasks' }],
+      include: [
+        { model: Task, as: 'Tasks' },
+        { model: TimeSession, as: 'PreviousSession' },
+        { model: Client, as: 'Client' },
+      ],
+    });
+
+    if (!session) {
+      return res.status(404).json({ error: 'Sessão não encontrada' });
+    }
+
+    if (title !== undefined) {
+      const trimmed = title.trim();
+      session.title = trimmed || 'Sessão de Foco';
+    }
+    if (client_id !== undefined) {
+      session.client_id = client_id || null;
+    }
+    if (target_minutes !== undefined) {
+      session.target_minutes = target_minutes ? Number(target_minutes) : null;
+    }
+
+    await session.save();
+
+    return res.json({
+      message: 'Sessão atualizada com sucesso',
+      session,
+    });
+  } catch (err: any) {
+    console.error('Error updating session:', err);
+    res.status(500).json({ error: 'Erro ao atualizar sessão' });
+  }
+});
+
+// PUT /api/sessions/:id/stop
+// Finaliza a sessão, preenchendo o end_time e opcionalmente atualizando o título antes de salvar.
+sessionsRouter.put('/:id/stop', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { title } = req.body || {};
+
+    const session = await TimeSession.findOne({
+      where: {
+        id,
+        tenant_id: req.tenantId!,
+        user_id: req.userId!,
+      },
+      include: [
+        { model: Task, as: 'Tasks' },
+        { model: Client, as: 'Client' },
+      ],
     });
 
     if (!session) {
@@ -164,6 +215,10 @@ sessionsRouter.put('/:id/stop', async (req: AuthenticatedRequest, res: Response)
 
     if (session.end_time) {
       return res.status(400).json({ error: 'Esta sessão já foi finalizada' });
+    }
+
+    if (title !== undefined && typeof title === 'string' && title.trim()) {
+      session.title = title.trim();
     }
 
     const serverEndTime = new Date();

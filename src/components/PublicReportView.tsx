@@ -12,6 +12,7 @@ import {
   ArrowLeft,
   AlertCircle,
   FileCheck,
+  Briefcase,
 } from 'lucide-react';
 import { PublicSharedReport } from '../types';
 import {
@@ -23,6 +24,7 @@ import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Dialog } from './ui/dialog';
+import { apiFetch } from '../utils/api';
 import { Input } from './ui/input';
 
 interface PublicReportViewProps {
@@ -49,7 +51,7 @@ export function PublicReportView({ token, onBackToApp }: PublicReportViewProps) 
       try {
         setLoading(true);
         setError(null);
-        const res = await fetch(`/api/public/shared/${token}`);
+        const res = await apiFetch(`/api/public/shared/${token}`);
         if (!res.ok) {
           const errJson = await res.json().catch(() => ({}));
           throw new Error(errJson.error || 'Relatório não encontrado ou token inválido.');
@@ -90,7 +92,7 @@ export function PublicReportView({ token, onBackToApp }: PublicReportViewProps) 
       setReviewLoading(true);
       setReviewError(null);
 
-      const res = await fetch(`/api/public/shared/${token}/review`, {
+      const res = await apiFetch(`/api/public/shared/${token}/review`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -210,17 +212,33 @@ export function PublicReportView({ token, onBackToApp }: PublicReportViewProps) 
             </div>
 
             {/* Total Billing Highlight */}
-            <div className="bg-neutral-50 dark:bg-neutral-850 border border-neutral-200 dark:border-neutral-750 rounded-xl p-4 md:text-right shrink-0">
-              <span className="text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider block">
-                Valor Total a Faturar
-              </span>
-              <span className="text-2xl sm:text-3xl font-bold font-mono text-emerald-700 dark:text-emerald-400 block mt-0.5">
-                {formatCurrency(data.summary.totalBillableAmount)}
-              </span>
-              <span className="text-xs text-neutral-500 dark:text-neutral-400 font-medium">
-                {data.summary.totalDecimalHours.toFixed(2)}h @ {formatCurrency(data.summary.hourlyRate)}/h
-              </span>
-            </div>
+            {data.include_cost ? (
+              <div className="bg-neutral-50 dark:bg-neutral-850 border border-neutral-200 dark:border-neutral-750 rounded-xl p-4 md:text-right shrink-0">
+                <span className="text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider block">
+                  Valor Total a Faturar
+                </span>
+                <span className="text-2xl sm:text-3xl font-bold font-mono text-emerald-700 dark:text-emerald-400 block mt-0.5">
+                  {formatCurrency(data.summary.totalBillableAmount)}
+                </span>
+                <span className="text-xs text-neutral-500 dark:text-neutral-400 font-medium">
+                  {data.summary.hasMultipleRates
+                    ? 'Calculado individualmente por sessão/cliente'
+                    : `${data.summary.totalDecimalHours.toFixed(2)}h @ ${formatCurrency(data.summary.hourlyRate)}/h`}
+                </span>
+              </div>
+            ) : (
+              <div className="bg-neutral-50 dark:bg-neutral-850 border border-neutral-200 dark:border-neutral-750 rounded-xl p-4 md:text-right shrink-0">
+                <span className="text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider block">
+                  Total de Horas Trabalhadas
+                </span>
+                <span className="text-2xl sm:text-3xl font-bold font-mono text-indigo-600 dark:text-indigo-400 block mt-0.5">
+                  {data.summary.totalDecimalHours.toFixed(2)}h
+                </span>
+                <span className="text-xs text-neutral-500 dark:text-neutral-400 font-medium">
+                  {formatDurationHuman(data.summary.totalDurationMs)}
+                </span>
+              </div>
+            )}
           </div>
 
           {/* APPROVAL & AUDIT WIDGET */}
@@ -248,9 +266,15 @@ export function PublicReportView({ token, onBackToApp }: PublicReportViewProps) 
               </div>
 
               {data.approval_status === 'pending' ? (
-                <p className="text-xs text-neutral-600 dark:text-neutral-400">
-                  Utilize o código de aprovação fornecido pelo emissor para aprovar ou rejeitar os apontamentos.
-                </p>
+                data.allow_approval ? (
+                  <p className="text-xs text-neutral-600 dark:text-neutral-400">
+                    Utilize o código de aprovação fornecido pelo emissor para aprovar ou rejeitar os apontamentos.
+                  </p>
+                ) : (
+                  <p className="text-xs text-neutral-500 dark:text-neutral-400 italic">
+                    Aprovação interativa desativada pelo emissor (somente leitura).
+                  </p>
+                )
               ) : (
                 <div className="text-xs space-y-0.5 text-neutral-700 dark:text-neutral-300 pt-1">
                   <p>
@@ -266,7 +290,7 @@ export function PublicReportView({ token, onBackToApp }: PublicReportViewProps) 
               )}
             </div>
 
-            {data.approval_status === 'pending' && (
+            {data.approval_status === 'pending' && data.allow_approval && (
               <div className="flex items-center gap-2 shrink-0">
                 <Button
                   onClick={() => {
@@ -296,7 +320,7 @@ export function PublicReportView({ token, onBackToApp }: PublicReportViewProps) 
           </div>
 
           {/* Metric Highlights Grid */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-neutral-100 dark:divide-neutral-800 bg-neutral-50/50 dark:bg-neutral-850/50 p-4 border-b border-neutral-200 dark:border-neutral-800 text-center">
+          <div className={`grid grid-cols-2 ${data.include_cost ? 'sm:grid-cols-4' : 'sm:grid-cols-3'} divide-y sm:divide-y-0 sm:divide-x divide-neutral-100 dark:divide-neutral-800 bg-neutral-50/50 dark:bg-neutral-850/50 p-4 border-b border-neutral-200 dark:border-neutral-800 text-center`}>
             <div className="p-3">
               <span className="text-xs text-neutral-500 dark:text-neutral-400 block font-medium">Horas Trabalhadas</span>
               <span className="text-xl font-bold font-mono text-neutral-900 dark:text-neutral-100 mt-1 block">
@@ -307,13 +331,19 @@ export function PublicReportView({ token, onBackToApp }: PublicReportViewProps) 
               </span>
             </div>
 
-            <div className="p-3">
-              <span className="text-xs text-neutral-500 dark:text-neutral-400 block font-medium">Taxa por Hora</span>
-              <span className="text-xl font-bold font-mono text-neutral-900 dark:text-neutral-100 mt-1 block">
-                {formatCurrency(data.summary.hourlyRate)}
-              </span>
-              <span className="text-xs text-neutral-400">Base acordada</span>
-            </div>
+            {data.include_cost && (
+              <div className="p-3">
+                <span className="text-xs text-neutral-500 dark:text-neutral-400 block font-medium">
+                  {data.summary.hasMultipleRates ? 'Taxas Aplicadas' : 'Taxa por Hora'}
+                </span>
+                <span className="text-xl font-bold font-mono text-neutral-900 dark:text-neutral-100 mt-1 block">
+                  {data.summary.hasMultipleRates ? 'Por Sessão' : formatCurrency(data.summary.hourlyRate)}
+                </span>
+                <span className="text-xs text-neutral-400">
+                  {data.summary.hasMultipleRates ? 'Conforme cada cliente' : 'Base acordada'}
+                </span>
+              </div>
+            )}
 
             <div className="p-3">
               <span className="text-xs text-neutral-500 dark:text-neutral-400 block font-medium">Sessões de Foco</span>
@@ -350,7 +380,7 @@ export function PublicReportView({ token, onBackToApp }: PublicReportViewProps) 
                     <th className="pb-3 pr-4">Sessão &amp; Tarefas</th>
                     <th className="pb-3 px-4 text-center">Início / Fim</th>
                     <th className="pb-3 px-4 text-right">Duração</th>
-                    <th className="pb-3 pl-4 text-right">Total</th>
+                    {data.include_cost && <th className="pb-3 pl-4 text-right">Total</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-neutral-100 dark:divide-neutral-800">
@@ -358,8 +388,16 @@ export function PublicReportView({ token, onBackToApp }: PublicReportViewProps) 
                     <tr key={s.id} className="hover:bg-neutral-50/50 dark:hover:bg-neutral-850/50 transition-colors">
                       {/* Session Name & Tasks list */}
                       <td className="py-4 pr-4 align-top">
-                        <div className="font-semibold text-neutral-900 dark:text-neutral-100 text-sm">
-                          {s.title}
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-semibold text-neutral-900 dark:text-neutral-100 text-sm">
+                            {s.title}
+                          </span>
+                          {s.client && (
+                            <span className="inline-flex items-center gap-1 text-2xs font-medium px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800">
+                              <Briefcase className="w-2.5 h-2.5" />
+                              {s.client.name}
+                            </span>
+                          )}
                         </div>
                         {s.tasks && s.tasks.length > 0 ? (
                           <ul className="mt-2 space-y-1.5 pl-2 border-l-2 border-neutral-200 dark:border-neutral-750">
@@ -399,9 +437,16 @@ export function PublicReportView({ token, onBackToApp }: PublicReportViewProps) 
                       </td>
 
                       {/* Billable Value */}
-                      <td className="py-4 pl-4 align-top text-right whitespace-nowrap font-mono font-semibold text-emerald-700 dark:text-emerald-400 text-sm">
-                        {formatCurrency(s.metrics.billableAmount)}
-                      </td>
+                      {data.include_cost && (
+                        <td className="py-4 pl-4 align-top text-right whitespace-nowrap font-mono">
+                          <div className="font-semibold text-emerald-700 dark:text-emerald-400 text-sm">
+                            {formatCurrency(s.metrics.billableAmount)}
+                          </div>
+                          <div className="text-2xs text-neutral-400 font-normal">
+                            @{formatCurrency(s.metrics.appliedHourlyRate ?? s.metrics.hourlyRate ?? (s.client?.hourly_rate ?? data.summary.hourlyRate))}/h
+                          </div>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -412,7 +457,11 @@ export function PublicReportView({ token, onBackToApp }: PublicReportViewProps) 
             <div className="pt-4 border-t border-neutral-200 dark:border-neutral-800 flex flex-col sm:flex-row items-center justify-between text-xs text-neutral-500 dark:text-neutral-400 gap-2">
               <span>Extrato para conferência e prestação de contas.</span>
               <div className="font-medium text-neutral-900 dark:text-neutral-100">
-                Total Geral: <strong className="text-emerald-700 dark:text-emerald-400 text-base font-mono ml-1">{formatCurrency(data.summary.totalBillableAmount)}</strong>
+                {data.include_cost ? (
+                  <>Total Geral: <strong className="text-emerald-700 dark:text-emerald-400 text-base font-mono ml-1">{formatCurrency(data.summary.totalBillableAmount)}</strong></>
+                ) : (
+                  <>Total de Horas: <strong className="text-indigo-600 dark:text-indigo-400 text-base font-mono ml-1">{data.summary.totalDecimalHours.toFixed(2)}h</strong></>
+                )}
               </div>
             </div>
           </CardContent>

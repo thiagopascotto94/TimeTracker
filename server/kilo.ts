@@ -10,8 +10,8 @@ import type {
  *
  * The Kilo Gateway provides an OpenAI-compatible endpoint at https://api.kilo.ai/api/gateway
  * API Key and Model are configured via environment secrets:
- * - KILO_API_KEY (or OPENAI_API_KEY)
- * - KILO_MODEL (or OPENAI_MODEL)
+ * - KILO_API_KEY
+ * - KILO_MODEL
  * - KILO_BASE_URL (defaults to https://api.kilo.ai/api/gateway)
  */
 
@@ -24,9 +24,9 @@ export interface KiloGatewayConfig {
 }
 
 export function getKiloConfig(): KiloGatewayConfig {
-  const apiKey = (process.env.KILO_API_KEY || process.env.OPENAI_API_KEY || '').trim();
-  const model = (process.env.KILO_MODEL || process.env.OPENAI_MODEL || '').trim();
-  const rawBaseURL = (process.env.KILO_BASE_URL || process.env.OPENAI_BASE_URL || 'https://api.kilo.ai/api/gateway').trim();
+  const apiKey = (process.env.KILO_API_KEY || '').trim();
+  const model = (process.env.KILO_MODEL || '').trim();
+  const rawBaseURL = (process.env.KILO_BASE_URL || 'https://api.kilo.ai/api/gateway').trim();
   // Remove trailing slash if present
   const baseURL = rawBaseURL.replace(/\/+$/, '');
 

@@ -52,19 +52,16 @@ export function Navbar({
     <>
       {/* Top Header */}
       <header className="sticky top-0 z-40 w-full border-b border-neutral-200 dark:border-neutral-800 bg-white/95 dark:bg-neutral-900/95 backdrop-blur-xs transition-colors">
-        <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
+        <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-3 sm:px-6 lg:px-8">
           {/* Brand & Workspace Indicator */}
-          <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 shadow-xs shrink-0">
-              <Clock className="h-5 w-5" />
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            <div className="flex h-8 w-8 sm:h-9 sm:w-9 items-center justify-center rounded-lg bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 shadow-xs shrink-0">
+              <Clock className="h-4 w-4 sm:h-5 sm:w-5" />
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="text-base font-bold tracking-tight text-neutral-900 dark:text-neutral-100">
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 sm:gap-2">
+                <span className="text-sm sm:text-base font-bold tracking-tight text-neutral-900 dark:text-neutral-100 truncate">
                   Time Tracking
-                </span>
-                <span className="hidden sm:inline-block text-xs text-neutral-400 dark:text-neutral-500 font-medium">
-                  &amp; Faturamento
                 </span>
               </div>
               {tenant && (
@@ -72,10 +69,6 @@ export function Navbar({
                   <Building2 className="h-3 w-3 text-neutral-400 dark:text-neutral-500" />
                   <span className="font-medium text-neutral-700 dark:text-neutral-300 truncate max-w-[140px]">
                     {tenant.name}
-                  </span>
-                  <span className="text-neutral-300 dark:text-neutral-700">•</span>
-                  <span className="text-emerald-700 dark:text-emerald-400 font-medium">
-                    {formatCurrency(user?.default_hourly_rate || 150)}/h
                   </span>
                 </div>
               )}
@@ -134,37 +127,24 @@ export function Navbar({
               <Briefcase className="h-4 w-4" />
               <span>Clientes</span>
             </button>
-
-            <button
-              onClick={() => handleTabSelect('settings')}
-              className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors cursor-pointer ${
-                activeTab === 'settings'
-                  ? 'bg-neutral-100 dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 shadow-2xs font-semibold'
-                  : 'text-neutral-600 dark:text-neutral-400 hover:bg-neutral-50 dark:hover:bg-neutral-800/60 hover:text-neutral-900 dark:hover:text-neutral-100'
-              }`}
-            >
-              <Settings className="h-4 w-4" />
-              <span>Configurações</span>
-            </button>
-
-            <button
-              onClick={() => handleTabSelect('assistant')}
-              className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-all cursor-pointer ${
-                activeTab === 'assistant'
-                  ? 'bg-indigo-600 text-white shadow-xs font-semibold'
-                  : 'text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/40'
-              }`}
-            >
-              <Sparkles className="h-4 w-4" />
-              <span>Assistente IA</span>
-              <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-indigo-500/20 dark:bg-indigo-400/20 font-bold uppercase tracking-wider">
-                60s
-              </span>
-            </button>
           </nav>
 
-          {/* Right Action Controls: Theme Toggle + User Switcher + Mobile Toggle */}
-          <div className="flex items-center gap-2">
+          {/* Right Action Controls: Settings Icon + Theme Toggle + User Switcher + Mobile Toggle */}
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            {/* Settings Icon Button */}
+            <button
+              onClick={() => handleTabSelect('settings')}
+              className={`flex h-9 w-9 items-center justify-center rounded-lg border transition-colors cursor-pointer focus:outline-none focus:ring-2 focus:ring-neutral-400 ${
+                activeTab === 'settings'
+                  ? 'border-neutral-900 dark:border-neutral-100 bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900'
+                  : 'border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-700 dark:text-neutral-100 hover:bg-neutral-100 dark:hover:bg-neutral-800'
+              }`}
+              title="Configurações"
+              aria-label="Configurações"
+            >
+              <Settings className="h-4 w-4" />
+            </button>
+
             {/* Dark Theme Toggle Button */}
             <button
               onClick={onToggleTheme}
@@ -319,38 +299,6 @@ export function Navbar({
                 </div>
                 <ChevronRight className="h-4 w-4 text-neutral-400" />
               </button>
-
-              <button
-                onClick={() => handleTabSelect('settings')}
-                className={`w-full min-h-[44px] flex items-center justify-between rounded-lg px-3.5 py-2.5 text-sm font-medium transition-colors cursor-pointer ${
-                  activeTab === 'settings'
-                    ? 'bg-neutral-100 dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 font-semibold'
-                    : 'text-neutral-700 dark:text-neutral-300 hover:bg-neutral-50 dark:hover:bg-neutral-850'
-                }`}
-              >
-                <div className="flex items-center gap-3">
-                  <Settings className="h-5 w-5 text-neutral-500 dark:text-neutral-400" />
-                  <span>Configurações &amp; Perfil</span>
-                </div>
-                <ChevronRight className="h-4 w-4 text-neutral-400" />
-              </button>
-
-              <button
-                onClick={() => handleTabSelect('assistant')}
-                className={`w-full min-h-[44px] flex items-center justify-between rounded-lg px-3.5 py-2.5 text-sm font-medium transition-colors cursor-pointer ${
-                  activeTab === 'assistant'
-                    ? 'bg-indigo-600 text-white font-semibold shadow-xs'
-                    : 'text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/40'
-                }`}
-              >
-                <div className="flex items-center gap-3">
-                  <Sparkles className="h-5 w-5" />
-                  <span>Assistente IA (Cronos AI)</span>
-                </div>
-                <Badge variant="indigo" className="text-2xs">
-                  60 steps
-                </Badge>
-              </button>
             </div>
 
             {/* Quick theme switcher row in mobile menu */}
@@ -425,27 +373,15 @@ export function Navbar({
         </button>
 
         <button
-          onClick={() => handleTabSelect('settings')}
-          className={`flex flex-col items-center justify-center py-1.5 px-2 min-w-[56px] min-h-[44px] rounded-lg transition-colors cursor-pointer ${
-            activeTab === 'settings'
+          onClick={() => handleTabSelect('clients')}
+          className={`flex flex-col items-center justify-center py-1.5 px-3 min-w-[64px] min-h-[44px] rounded-lg transition-colors cursor-pointer ${
+            activeTab === 'clients'
               ? 'text-neutral-900 dark:text-neutral-100 font-semibold'
               : 'text-neutral-500 dark:text-neutral-400 hover:text-neutral-700'
           }`}
         >
-          <Settings className="h-5 w-5" />
-          <span className="text-[10px] mt-1">Perfil</span>
-        </button>
-
-        <button
-          onClick={() => handleTabSelect('assistant')}
-          className={`flex flex-col items-center justify-center py-1.5 px-2 min-w-[56px] min-h-[44px] rounded-lg transition-colors cursor-pointer ${
-            activeTab === 'assistant'
-              ? 'text-indigo-600 dark:text-indigo-400 font-semibold'
-              : 'text-neutral-500 dark:text-neutral-400 hover:text-indigo-600'
-          }`}
-        >
-          <Sparkles className="h-5 w-5" />
-          <span className="text-[10px] mt-1">IA</span>
+          <Briefcase className="h-5 w-5" />
+          <span className="text-[10px] mt-1">Clientes</span>
         </button>
       </nav>
     </>

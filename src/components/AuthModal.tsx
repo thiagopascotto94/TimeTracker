@@ -5,6 +5,7 @@ import { Dialog } from './ui/dialog';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { useToast } from './ui/toast';
+import { apiFetch } from '../utils/api';
 
 interface AuthModalProps {
   open: boolean;
@@ -39,7 +40,7 @@ export function AuthModal({
     e.preventDefault();
     try {
       setLoading(true);
-      const res = await fetch('/api/auth/login', {
+      const res = await apiFetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
@@ -51,6 +52,9 @@ export function AuthModal({
       }
 
       const data = await res.json();
+      if (data.token) {
+        localStorage.setItem('jwt_token', data.token);
+      }
       onLoginSuccess(data.user, data.tenant);
       onOpenChange(false);
       setConfirmLogoutActive(false);
@@ -74,7 +78,7 @@ export function AuthModal({
     e.preventDefault();
     try {
       setLoading(true);
-      const res = await fetch('/api/auth/register', {
+      const res = await apiFetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -92,6 +96,9 @@ export function AuthModal({
       }
 
       const data = await res.json();
+      if (data.token) {
+        localStorage.setItem('jwt_token', data.token);
+      }
       onLoginSuccess(data.user, data.tenant);
       onOpenChange(false);
       setConfirmLogoutActive(false);
@@ -122,7 +129,8 @@ export function AuthModal({
   const executeLogout = async () => {
     try {
       setLoading(true);
-      await fetch('/api/auth/logout', { method: 'POST' });
+      await apiFetch('/api/auth/logout', { method: 'POST' });
+      localStorage.removeItem('jwt_token');
       onLogoutSuccess();
       onOpenChange(false);
       setConfirmLogoutActive(false);

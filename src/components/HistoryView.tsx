@@ -23,6 +23,7 @@ import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { useToast } from './ui/toast';
 import { Dialog } from './ui/dialog';
+import { ClientFilterAutocomplete } from './ClientFilterAutocomplete';
 
 interface HistoryViewProps {
   sessions: TimeSession[];
@@ -76,18 +77,13 @@ export function HistoryView({
               Registro Cronológico
             </CardTitle>
             <div className="flex items-center gap-2">
-              <select
-                value={clientFilter}
-                onChange={(e) => setClientFilter(e.target.value)}
-                className="text-xs rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 px-2.5 py-1 text-neutral-800 dark:text-neutral-200 focus:outline-none focus:ring-1 focus:ring-neutral-400"
-              >
-                <option value="all">Todos os Clientes</option>
-                {clients.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
+              <ClientFilterAutocomplete
+                clients={clients}
+                selectedClientId={clientFilter}
+                onSelectClient={setClientFilter}
+                allLabel="Todos os Clientes"
+                allValue="all"
+              />
               <Badge variant="outline" className="text-xs">
                 {filteredSessions.length} de {sessions.length} sessões
               </Badge>

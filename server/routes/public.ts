@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { Op } from 'sequelize';
-import { SharedReport, TimeSession, Task, Tenant } from '../db';
+import { SharedReport, TimeSession, Task, Tenant, Client } from '../db';
 import { calculateSessionMetrics } from './reports';
 
 export const publicRouter = Router();
@@ -18,38 +18,60 @@ publicRouter.get('/shared/:token', async (req: Request, res: Response) => {
     // Try finding in SharedReports first
     const shared = await SharedReport.findOne({
       where: { token },
+      include: [
+        {
+          model: Client,
+          as: 'Client',
+        },
+      ],
     });
 
     let tenantId: string | null = null;
     let hourlyRate = 150.0;
     let title = 'Relatório de Prestação de Contas';
+    let includeCost = true;
+    let allowApproval = true;
     let whereClause: any = {};
 
     if (shared) {
       tenantId = shared.tenant_id;
       hourlyRate = shared.hourly_rate;
       title = shared.title;
+      includeCost =
+        shared.include_cost !== undefined && shared.include_cost !== null
+          ? shared.include_cost === true || (shared.include_cost as any) === 1 || (shared.include_cost as any) === '1'
+          : true;
+      allowApproval =
+        shared.allow_approval !== undefined && shared.allow_approval !== null
+          ? shared.allow_approval === true || (shared.allow_approval as any) === 1 || (shared.allow_approval as any) === '1'
+          : true;
 
       whereClause = { tenant_id: tenantId };
       if (shared.session_id) {
         whereClause.id = shared.session_id;
-      } else if (shared.start_date || shared.end_date) {
-        whereClause.start_time = {};
-        if (shared.start_date) {
-          const start = new Date(shared.start_date);
-          start.setHours(0, 0, 0, 0);
-          whereClause.start_time[Op.gte] = start;
+      } else {
+        if (shared.client_id) {
+          whereClause.client_id = shared.client_id;
         }
-        if (shared.end_date) {
-          const end = new Date(shared.end_date);
-          end.setHours(23, 59, 59, 999);
-          whereClause.start_time[Op.lte] = end;
+        if (shared.start_date || shared.end_date) {
+          whereClause.start_time = {};
+          if (shared.start_date) {
+            const start = new Date(shared.start_date);
+            start.setHours(0, 0, 0, 0);
+            whereClause.start_time[Op.gte] = start;
+          }
+          if (shared.end_date) {
+            const end = new Date(shared.end_date);
+            end.setHours(23, 59, 59, 999);
+            whereClause.start_time[Op.lte] = end;
+          }
         }
       }
     } else {
       // Check if it's a direct session public_token
       const sessionByToken = await TimeSession.findOne({
         where: { public_token: token },
+        include: [{ model: Client, as: 'Client' }],
       });
 
       if (!sessionByToken) {
@@ -59,6 +81,9 @@ publicRouter.get('/shared/:token', async (req: Request, res: Response) => {
       tenantId = sessionByToken.tenant_id;
       title = `Relatório: ${sessionByToken.title}`;
       whereClause = { id: sessionByToken.id, tenant_id: tenantId };
+      if (sessionByToken.Client?.hourly_rate) {
+        hourlyRate = sessionByToken.Client.hourly_rate;
+      }
     }
 
     const tenant = tenantId ? await Tenant.findByPk(tenantId) : null;
@@ -70,17 +95,29 @@ publicRouter.get('/shared/:token', async (req: Request, res: Response) => {
           model: Task,
           as: 'Tasks',
         },
+        {
+          model: Client,
+          as: 'Client',
+        },
       ],
       order: [['start_time', 'DESC']],
     });
 
     let totalDurationMs = 0;
     let totalTasksCount = 0;
+    let totalBillableAmount = 0;
+    const appliedRates = new Set<number>();
 
     const mappedSessions = sessions.map((sess) => {
-      const metrics = calculateSessionMetrics(sess, hourlyRate);
+      // O valor da sessão é calculado por sessão/cliente
+      const sessionRate = sess.Client?.hourly_rate ?? hourlyRate;
+      appliedRates.add(sessionRate);
+
+      const metrics = calculateSessionMetrics(sess, sessionRate);
       totalDurationMs += metrics.durationMs;
       totalTasksCount += sess.Tasks ? sess.Tasks.length : 0;
+      // O valor final do relatório é a soma exata dos valores individuais calculados por sessão
+      totalBillableAmount = Number((totalBillableAmount + metrics.billableAmount).toFixed(2));
 
       return {
         id: sess.id,
@@ -88,6 +125,13 @@ publicRouter.get('/shared/:token', async (req: Request, res: Response) => {
         start_time: sess.start_time,
         end_time: sess.end_time,
         target_minutes: sess.target_minutes,
+        client: sess.Client
+          ? {
+              id: sess.Client.id,
+              name: sess.Client.name,
+              hourly_rate: sess.Client.hourly_rate,
+            }
+          : null,
         tasks: (sess.Tasks || []).map((t) => ({
           id: t.id,
           description: t.description,
@@ -98,8 +142,10 @@ publicRouter.get('/shared/:token', async (req: Request, res: Response) => {
     });
 
     const totalDecimalHours = Number((totalDurationMs / 3600000).toFixed(2));
-    const totalBillableAmount = Number((totalDecimalHours * hourlyRate).toFixed(2));
+    totalBillableAmount = Number(totalBillableAmount.toFixed(2));
     const totalMinutes = Math.round(totalDurationMs / 60000);
+    const hasMultipleRates = appliedRates.size > 1;
+    const effectiveRate = appliedRates.size === 1 ? Array.from(appliedRates)[0] : hourlyRate;
 
     return res.json({
       title,
@@ -109,11 +155,14 @@ publicRouter.get('/shared/:token', async (req: Request, res: Response) => {
       approved_by: shared ? shared.approved_by || null : null,
       approved_at: shared ? shared.approved_at || null : null,
       approval_ip: shared ? shared.approval_ip || null : null,
+      include_cost: includeCost,
+      allow_approval: allowApproval,
       summary: {
         totalDurationMs,
         totalMinutes,
         totalDecimalHours,
-        hourlyRate,
+        hourlyRate: effectiveRate,
+        hasMultipleRates,
         totalBillableAmount,
         totalSessionsCount: mappedSessions.length,
         totalTasksCount,

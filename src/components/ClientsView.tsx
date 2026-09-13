@@ -7,6 +7,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { useToast } from './ui/toast';
 import { Dialog } from './ui/dialog';
+import { apiFetch } from '../utils/api';
 
 interface ClientsViewProps {
   clients: Client[];
@@ -65,7 +66,7 @@ export function ClientsView({ clients, onRefreshClients, defaultHourlyRate }: Cl
       };
 
       if (editingClient) {
-        const res = await fetch(`/api/clients/${editingClient.id}`, {
+        const res = await apiFetch(`/api/clients/${editingClient.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -74,7 +75,7 @@ export function ClientsView({ clients, onRefreshClients, defaultHourlyRate }: Cl
         if (!res.ok) throw new Error(data.error || 'Erro ao atualizar cliente');
         addToast({ title: 'Cliente atualizado com sucesso!', variant: 'default' });
       } else {
-        const res = await fetch('/api/clients', {
+        const res = await apiFetch('/api/clients', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -96,7 +97,7 @@ export function ClientsView({ clients, onRefreshClients, defaultHourlyRate }: Cl
   const confirmDelete = async () => {
     if (!deleteClientId) return;
     try {
-      const res = await fetch(`/api/clients/${deleteClientId}`, { method: 'DELETE' });
+      const res = await apiFetch(`/api/clients/${deleteClientId}`, { method: 'DELETE' });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Erro ao excluir cliente');
       addToast({ title: 'Cliente excluído com sucesso.', variant: 'default' });
