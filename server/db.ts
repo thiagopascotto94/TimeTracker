@@ -112,11 +112,16 @@ export interface TimeSessionAttributes {
   user_id: string;
   client_id?: string | null;
   title?: string;
+  notes?: string | null;
   start_time: Date;
   end_time?: Date | null;
   target_minutes?: number | null;
   previous_session_id?: string | null;
   public_token?: string | null;
+  hourly_rate?: number | null;
+  is_locked?: boolean;
+  locked_at?: Date | null;
+  locked_reason?: string | null;
 }
 export class TimeSession extends Model<TimeSessionAttributes> implements TimeSessionAttributes {
   public id!: string;
@@ -124,11 +129,16 @@ export class TimeSession extends Model<TimeSessionAttributes> implements TimeSes
   public user_id!: string;
   public client_id!: string | null;
   public title!: string;
+  public notes!: string | null;
   public start_time!: Date;
   public end_time!: Date | null;
   public target_minutes!: number | null;
   public previous_session_id!: string | null;
   public public_token!: string | null;
+  public hourly_rate!: number | null;
+  public is_locked!: boolean;
+  public locked_at!: Date | null;
+  public locked_reason!: string | null;
   public readonly Tasks?: Task[];
   public readonly PreviousSession?: TimeSession | null;
   public readonly Client?: Client | null;
@@ -157,6 +167,10 @@ TimeSession.init(
       allowNull: true,
       defaultValue: 'Sessão de Trabalho',
     },
+    notes: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
     start_time: {
       type: DataTypes.DATE,
       allowNull: false,
@@ -174,6 +188,23 @@ TimeSession.init(
       allowNull: true,
     },
     public_token: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    hourly_rate: {
+      type: DataTypes.FLOAT,
+      allowNull: true,
+    },
+    is_locked: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+    },
+    locked_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    locked_reason: {
       type: DataTypes.STRING,
       allowNull: true,
     },
@@ -246,11 +277,95 @@ Client.init(
   }
 );
 
+export interface ClientContactAttributes {
+  id: string;
+  tenant_id: string;
+  client_id: string;
+  name: string;
+  email: string;
+  role?: string | null;
+  phone?: string | null;
+  password_hash: string;
+  must_change_password: boolean;
+  last_login_at?: Date | null;
+  created_at?: Date;
+  updated_at?: Date;
+}
+export class ClientContact extends Model<ClientContactAttributes> implements ClientContactAttributes {
+  public id!: string;
+  public tenant_id!: string;
+  public client_id!: string;
+  public name!: string;
+  public email!: string;
+  public role!: string | null;
+  public phone!: string | null;
+  public password_hash!: string;
+  public must_change_password!: boolean;
+  public last_login_at!: Date | null;
+  public readonly created_at!: Date;
+  public readonly updated_at!: Date;
+  public readonly Client?: Client | null;
+}
+ClientContact.init(
+  {
+    id: {
+      type: DataTypes.STRING,
+      primaryKey: true,
+      defaultValue: () => crypto.randomUUID(),
+    },
+    tenant_id: {
+      type: DataTypes.STRING,
+      allowNull: false,
+    },
+    client_id: {
+      type: DataTypes.STRING,
+      allowNull: false,
+    },
+    name: {
+      type: DataTypes.STRING,
+      allowNull: false,
+    },
+    email: {
+      type: DataTypes.STRING,
+      allowNull: false,
+    },
+    role: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    phone: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    password_hash: {
+      type: DataTypes.STRING,
+      allowNull: false,
+    },
+    must_change_password: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: true,
+    },
+    last_login_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+  },
+  {
+    sequelize,
+    modelName: 'ClientContact',
+    tableName: 'client_contacts',
+    underscored: true,
+    timestamps: true,
+  }
+);
+
 export interface TaskAttributes {
   id: string;
   tenant_id: string;
   time_session_id: string;
   description: string;
+  notes?: string | null;
   created_at?: Date;
 }
 export class Task extends Model<TaskAttributes> implements TaskAttributes {
@@ -258,6 +373,7 @@ export class Task extends Model<TaskAttributes> implements TaskAttributes {
   public tenant_id!: string;
   public time_session_id!: string;
   public description!: string;
+  public notes!: string | null;
   public readonly created_at!: Date;
 }
 Task.init(
@@ -278,6 +394,10 @@ Task.init(
     description: {
       type: DataTypes.STRING,
       allowNull: false,
+    },
+    notes: {
+      type: DataTypes.TEXT,
+      allowNull: true,
     },
   },
   {
@@ -441,6 +561,11 @@ Client.belongsTo(Tenant, { foreignKey: 'tenant_id' });
 Client.hasMany(TimeSession, { foreignKey: 'client_id' });
 TimeSession.belongsTo(Client, { foreignKey: 'client_id', as: 'Client' });
 
+Client.hasMany(ClientContact, { foreignKey: 'client_id', as: 'Contacts' });
+ClientContact.belongsTo(Client, { foreignKey: 'client_id', as: 'Client' });
+Tenant.hasMany(ClientContact, { foreignKey: 'tenant_id' });
+ClientContact.belongsTo(Tenant, { foreignKey: 'tenant_id' });
+
 export interface AiMessageAttributes {
   id: string;
   tenant_id: string;
@@ -517,6 +642,7 @@ export async function initDb() {
   await sequelize.query('DROP TABLE IF EXISTS tasks_backup;').catch(() => {});
   await sequelize.query('DROP TABLE IF EXISTS shared_reports_backup;').catch(() => {});
   await sequelize.query('DROP TABLE IF EXISTS clients_backup;').catch(() => {});
+  await sequelize.query('DROP TABLE IF EXISTS client_contacts_backup;').catch(() => {});
   await sequelize.query('DROP TABLE IF EXISTS ai_messages_backup;').catch(() => {});
 
   // Safe synchronization for SQLite (creates tables if they do not exist)
@@ -546,6 +672,12 @@ export async function initDb() {
   await addColumnIfNotExists('shared_reports', 'client_id', 'VARCHAR(255)');
   await addColumnIfNotExists('time_sessions', 'client_id', 'VARCHAR(255)');
   await addColumnIfNotExists('time_sessions', 'public_token', 'VARCHAR(255)');
+  await addColumnIfNotExists('time_sessions', 'notes', 'TEXT');
+  await addColumnIfNotExists('time_sessions', 'hourly_rate', 'FLOAT');
+  await addColumnIfNotExists('time_sessions', 'is_locked', 'BOOLEAN DEFAULT 0');
+  await addColumnIfNotExists('time_sessions', 'locked_at', 'DATETIME');
+  await addColumnIfNotExists('time_sessions', 'locked_reason', 'VARCHAR(255)');
+  await addColumnIfNotExists('tasks', 'notes', 'TEXT');
 
   // Ensure default tenant exists
   let defaultTenant = await Tenant.findOne();
@@ -592,6 +724,24 @@ export async function initDb() {
       email: 'tech@globex.com',
       hourly_rate: 150.0,
       notes: 'Painel administrativo.',
+    });
+  }
+
+  // Ensure default client contact exists
+  const contactCount = await ClientContact.count();
+  if (contactCount === 0 && defaultClient) {
+    const tempSalt = await bcrypt.genSalt(10);
+    const tempHash = await bcrypt.hash('Aprov@2026', tempSalt);
+    await ClientContact.create({
+      id: 'contact-default-1',
+      tenant_id: defaultTenant.id,
+      client_id: defaultClient.id,
+      name: 'Mariana Costa',
+      email: 'mariana.costa@acmecorp.com',
+      role: 'Diretoria Financeira & Aprovadora',
+      phone: '(11) 98765-4321',
+      password_hash: tempHash,
+      must_change_password: true,
     });
   }
 

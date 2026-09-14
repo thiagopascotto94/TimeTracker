@@ -15,8 +15,9 @@ export function calculateSessionMetrics(session: any, hourlyRate: number) {
   const durationMs = Math.max(0, end - start);
   const durationMinutes = Math.round(durationMs / 60000);
   const decimalHours = Number((durationMs / 3600000).toFixed(2));
-  // O valor cobrável desta sessão é calculado com a taxa específica desta sessão/cliente
-  const billableAmount = Number((decimalHours * hourlyRate).toFixed(2));
+  // O valor da sessão é calculado individualmente com precisão temporal e a taxa específica desta sessão/cliente
+  const exactHours = durationMs / 3600000;
+  const billableAmount = Number((exactHours * hourlyRate).toFixed(2));
 
   return {
     durationMs,
@@ -94,8 +95,8 @@ reportsRouter.get('/', async (req: AuthenticatedRequest, res: Response) => {
     const appliedRatesSet = new Set<number>();
 
     const mappedSessions = sessions.map((sess) => {
-      // Prioridade: Taxa personalizada do cliente da sessão -> Taxa padrão do perfil
-      const sessionRate = sess.Client?.hourly_rate ?? defaultHourlyRate;
+      // Prioridade: Taxa da sessão editada -> Taxa personalizada do cliente -> Taxa padrão do perfil
+      const sessionRate = sess.hourly_rate ?? (sess.Client?.hourly_rate ?? defaultHourlyRate);
       appliedRatesSet.add(sessionRate);
 
       const metrics = calculateSessionMetrics(sess, sessionRate);
@@ -107,9 +108,14 @@ reportsRouter.get('/', async (req: AuthenticatedRequest, res: Response) => {
       return {
         id: sess.id,
         title: sess.title,
+        notes: sess.notes,
         start_time: sess.start_time,
         end_time: sess.end_time,
         target_minutes: sess.target_minutes,
+        hourly_rate: sess.hourly_rate,
+        is_locked: sess.is_locked || false,
+        locked_at: sess.locked_at,
+        locked_reason: sess.locked_reason,
         previous_session_id: sess.previous_session_id,
         previous_session: sess.PreviousSession,
         client: sess.Client || null,

@@ -20,25 +20,13 @@ export function showNativeNotification(title: string, options?: NotificationOpti
   if (!('Notification' in window)) return;
 
   if (Notification.permission === 'granted') {
-    if ('serviceWorker' in navigator && navigator.serviceWorker.controller) {
-      navigator.serviceWorker.ready.then((registration) => {
-        registration.showNotification(title, {
-          icon: '/pwa-192x192.png',
-          badge: '/pwa-192x192.png',
-          ...options,
-        });
-      }).catch(() => {
-        // Fallback to standard Notification constructor
-        new Notification(title, {
-          icon: '/pwa-192x192.png',
-          ...options,
-        });
-      });
-    } else {
+    try {
       new Notification(title, {
-        icon: '/pwa-192x192.png',
+        icon: '/icon.svg',
         ...options,
       });
+    } catch (e) {
+      console.warn('Falha ao emitir notificação nativa:', e);
     }
   }
 }

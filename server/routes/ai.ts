@@ -2,7 +2,7 @@ import { Router, Response } from 'express';
 import { GoogleGenAI, Type, FunctionDeclaration } from '@google/genai';
 import { Op } from 'sequelize';
 import crypto from 'crypto';
-import { TimeSession, Task, Client, User, AiMessage } from '../db';
+import { TimeSession, Task, Client, User, AiMessage, ClientContact } from '../db';
 import { authMiddleware, AuthenticatedRequest } from '../auth';
 import { getKiloConfig, getKiloClient, runKiloAgenticChat } from '../kilo';
 
@@ -231,13 +231,13 @@ function getGenAI(): GoogleGenAI {
 const searchHistoryDeclaration: FunctionDeclaration = {
   name: 'search_history',
   description:
-    'Pesquisa o histórico de sessões de trabalho do usuário e tenant atual. Permite buscar por texto no título/tarefas, filtrar por cliente, período de datas e limite de registros.',
+    'Pesquisa o histórico de sessões de trabalho do usuário e tenant atual. Permite buscar por texto no título, observações da sessão (notes) ou descrição/observações de tarefas, filtrar por cliente, período de datas e limite.',
   parameters: {
     type: Type.OBJECT,
     properties: {
       query: {
         type: Type.STRING,
-        description: 'Termo de busca para título da sessão ou descrição de tarefas.',
+        description: 'Termo de busca para título da sessão, observações da sessão (notes) ou tarefas/observações de tarefas.',
       },
       client_name: {
         type: Type.STRING,
@@ -253,7 +253,7 @@ const searchHistoryDeclaration: FunctionDeclaration = {
       },
       limit: {
         type: Type.INTEGER,
-        description: 'Quantidade máxima de sessões a retornar (padrão 10).',
+        description: 'Quantidade máxima de sessões a retornar (padrão 10, máximo 50).',
       },
     },
   },
@@ -262,7 +262,7 @@ const searchHistoryDeclaration: FunctionDeclaration = {
 const getActiveSessionDeclaration: FunctionDeclaration = {
   name: 'get_active_session',
   description:
-    'Verifica se há um cronômetro / sessão de trabalho atualmente em execução para o usuário no tenant atual, retornando detalhes, tempo decorrido, cliente e tarefas registradas.',
+    'Verifica se há um cronômetro / sessão de trabalho atualmente em execução, retornando detalhes completos: tempo decorrido, meta, cliente, observações da sessão (notes), token de compartilhamento público e todas as tarefas registradas com suas respectivas observações (notes).',
   parameters: {
     type: Type.OBJECT,
     properties: {},
@@ -272,13 +272,17 @@ const getActiveSessionDeclaration: FunctionDeclaration = {
 const startTimerDeclaration: FunctionDeclaration = {
   name: 'start_timer',
   description:
-    'Inicia uma nova sessão de cronômetro de trabalho para o usuário no servidor. Registra o timestamp oficial e vincula opcionalmente a um cliente ou sessão anterior.',
+    'Inicia uma nova sessão de cronômetro de trabalho para o usuário no servidor. Registra o timestamp oficial e vincula opcionalmente a um cliente, observações preliminares da sessão e sessão anterior.',
   parameters: {
     type: Type.OBJECT,
     properties: {
       title: {
         type: Type.STRING,
-        description: 'Título ou objetivo da sessão de trabalho.',
+        description: 'Título ou objetivo principal da sessão de trabalho.',
+      },
+      notes: {
+        type: Type.STRING,
+        description: 'Observações, briefing, links de referência ou anotações gerais da sessão de trabalho.',
       },
       target_minutes: {
         type: Type.NUMBER,
@@ -301,16 +305,55 @@ const startTimerDeclaration: FunctionDeclaration = {
   },
 };
 
+const updateActiveSessionDeclaration: FunctionDeclaration = {
+  name: 'update_active_session',
+  description:
+    'Atualiza dados da sessão de cronômetro ativa em andamento, permitindo alterar o título, as observações gerais da sessão (notes), meta de minutos ou associar a um cliente.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      title: {
+        type: Type.STRING,
+        description: 'Novo título para a sessão de cronômetro ativa.',
+      },
+      notes: {
+        type: Type.STRING,
+        description: 'Novas observações ou anotações gerais da sessão de trabalho.',
+      },
+      target_minutes: {
+        type: Type.NUMBER,
+        description: 'Nova meta de tempo em minutos.',
+      },
+      client_name: {
+        type: Type.STRING,
+        description: 'Nome do cliente para vincular ou alterar na sessão ativa.',
+      },
+      client_id: {
+        type: Type.STRING,
+        description: 'ID exato do cliente.',
+      },
+    },
+  },
+};
+
 const stopTimerDeclaration: FunctionDeclaration = {
   name: 'stop_timer',
   description:
-    'Finaliza a sessão de cronômetro atualmente ativa para o usuário, preenchendo o horário de término e calculando a duração total e o valor a faturar.',
+    'Finaliza a sessão de cronômetro atualmente ativa, preenchendo o horário de término e calculando a duração total e valor a faturar. Permite registrar observações finais da sessão e/ou uma última tarefa realizada.',
   parameters: {
     type: Type.OBJECT,
     properties: {
       notes: {
         type: Type.STRING,
-        description: 'Anotação final ou tarefa de encerramento opcional.',
+        description: 'Observações finais ou resumo geral para registrar na sessão de cronômetro.',
+      },
+      session_notes: {
+        type: Type.STRING,
+        description: 'Observações da sessão a serem gravadas permanentemente.',
+      },
+      final_task: {
+        type: Type.STRING,
+        description: 'Descrição de uma tarefa final a ser registrada na sessão antes do encerramento (opcional).',
       },
     },
   },
@@ -319,17 +362,21 @@ const stopTimerDeclaration: FunctionDeclaration = {
 const addTaskToTimerDeclaration: FunctionDeclaration = {
   name: 'add_task_to_timer',
   description:
-    'Adiciona uma tarefa ou anotação de atividade realizada à sessão ativa (ou a uma sessão específica).',
+    'Adiciona uma tarefa ou anotação de atividade realizada à sessão ativa (ou específica), com descrição e observações detalhadas opcionais (notes).',
   parameters: {
     type: Type.OBJECT,
     properties: {
       description: {
         type: Type.STRING,
-        description: 'Descrição detalhada da tarefa ou atividade realizada.',
+        description: 'Descrição da tarefa ou atividade realizada.',
+      },
+      notes: {
+        type: Type.STRING,
+        description: 'Observações detalhadas, contexto, links ou especificações sobre esta tarefa específica.',
       },
       session_id: {
         type: Type.STRING,
-        description: 'ID da sessão. Se omitido, adiciona à sessão que está atualmente em andamento.',
+        description: 'ID da sessão. Se omitido, adiciona à sessão ativa atual.',
       },
     },
     required: ['description'],
@@ -339,16 +386,27 @@ const addTaskToTimerDeclaration: FunctionDeclaration = {
 const addMultipleTasksToTimerDeclaration: FunctionDeclaration = {
   name: 'add_multiple_tasks_to_timer',
   description:
-    'Adiciona múltiplas tarefas em lote para a sessão ativa (ou especificada). Excelente para quando tarefas são extraídas de imagens, listas ou relatórios.',
+    'Adiciona múltiplas tarefas em lote para a sessão ativa (ou especificada). Suporta itens com descrição e observações individuais (notes).',
   parameters: {
     type: Type.OBJECT,
     properties: {
       tasks: {
         type: Type.ARRAY,
         items: {
-          type: Type.STRING,
+          type: Type.OBJECT,
+          properties: {
+            description: {
+              type: Type.STRING,
+              description: 'Descrição da tarefa.',
+            },
+            notes: {
+              type: Type.STRING,
+              description: 'Observações ou detalhes da tarefa (opcional).',
+            },
+          },
+          required: ['description'],
         },
-        description: 'Lista de descrições das tarefas a adicionar.',
+        description: 'Lista de tarefas a adicionar (cada uma contendo descrição e observações opcionais).',
       },
       session_id: {
         type: Type.STRING,
@@ -359,16 +417,71 @@ const addMultipleTasksToTimerDeclaration: FunctionDeclaration = {
   },
 };
 
+const updateTaskDeclaration: FunctionDeclaration = {
+  name: 'update_task',
+  description:
+    'Atualiza uma tarefa já existente em uma sessão, permitindo alterar sua descrição e/ou suas observações detalhadas (notes).',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      task_id: {
+        type: Type.STRING,
+        description: 'ID da tarefa a ser editada.',
+      },
+      description: {
+        type: Type.STRING,
+        description: 'Nova descrição da tarefa.',
+      },
+      notes: {
+        type: Type.STRING,
+        description: 'Novas observações ou anotações detalhadas da tarefa.',
+      },
+    },
+    required: ['task_id'],
+  },
+};
+
+const deleteTaskDeclaration: FunctionDeclaration = {
+  name: 'delete_task',
+  description:
+    'Remove uma tarefa de uma sessão de cronômetro caso o usuário solicite.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      task_id: {
+        type: Type.STRING,
+        description: 'ID da tarefa a ser removida.',
+      },
+    },
+    required: ['task_id'],
+  },
+};
+
+const getPublicReportLinkDeclaration: FunctionDeclaration = {
+  name: 'get_public_report_link',
+  description:
+    'Gera e retorna o link público compartilhável do relatório da sessão para envio ao cliente (para conferência em tempo real e aprovação de horas, tarefas e observações).',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      session_id: {
+        type: Type.STRING,
+        description: 'ID da sessão de trabalho. Se omitido, busca da sessão ativa atual ou da última sessão realizada.',
+      },
+    },
+  },
+};
+
 const listClientsDeclaration: FunctionDeclaration = {
   name: 'list_clients',
   description:
-    'Lista os clientes cadastrados no tenant atual, com suas taxas horárias e dados de contato.',
+    'Lista os clientes cadastrados no workspace com taxas horárias, observações (notes) e contatos/responsáveis cadastrados para o portal.',
   parameters: {
     type: Type.OBJECT,
     properties: {
       query: {
         type: Type.STRING,
-        description: 'Filtro por nome ou empresa do cliente.',
+        description: 'Filtro por nome, empresa ou email do cliente.',
       },
     },
   },
@@ -377,7 +490,7 @@ const listClientsDeclaration: FunctionDeclaration = {
 const createClientDeclaration: FunctionDeclaration = {
   name: 'create_client',
   description:
-    'Cadastra um novo cliente no workspace tenant atual com taxa horária personalizada.',
+    'Cadastra um novo cliente no workspace tenant atual com taxa horária personalizada e observações contratuais.',
   parameters: {
     type: Type.OBJECT,
     properties: {
@@ -399,7 +512,7 @@ const createClientDeclaration: FunctionDeclaration = {
       },
       notes: {
         type: Type.STRING,
-        description: 'Observações ou escopo contratado.',
+        description: 'Observações gerais, escopo acordado ou particularidades do cliente.',
       },
     },
     required: ['name'],
@@ -421,16 +534,40 @@ const getFinancialSummaryDeclaration: FunctionDeclaration = {
   },
 };
 
+const suggestSessionTitleDeclaration: FunctionDeclaration = {
+  name: 'suggest_session_title',
+  description:
+    'Analisa as tarefas realizadas e observações registradas na sessão ativa e gera uma sugestão de título inteligente e profissional, podendo aplicá-lo automaticamente.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      session_id: {
+        type: Type.STRING,
+        description: 'ID da sessão. Se omitido, analisa a sessão ativa atual.',
+      },
+      auto_apply: {
+        type: Type.BOOLEAN,
+        description: 'Se true, já atualiza automaticamente o título da sessão ativa com o título sugerido.',
+      },
+    },
+  },
+};
+
 const AI_TOOLS = [
   searchHistoryDeclaration,
   getActiveSessionDeclaration,
   startTimerDeclaration,
+  updateActiveSessionDeclaration,
   stopTimerDeclaration,
   addTaskToTimerDeclaration,
   addMultipleTasksToTimerDeclaration,
+  updateTaskDeclaration,
+  deleteTaskDeclaration,
+  getPublicReportLinkDeclaration,
   listClientsDeclaration,
   createClientDeclaration,
   getFinancialSummaryDeclaration,
+  suggestSessionTitleDeclaration,
 ];
 
 // Tool Execution Handler with Strict Multi-Tenant Isolation
@@ -466,13 +603,20 @@ async function executeTool(
           active: true,
           id: active.id,
           title: active.title,
+          notes: active.notes || null,
           start_time: active.start_time,
           target_minutes: active.target_minutes,
           elapsed_minutes: elapsedMinutes,
           estimated_billable: `R$ ${billable.toFixed(2)}`,
           client: active.Client ? { id: active.Client.id, name: active.Client.name, company: active.Client.company } : null,
+          public_token: active.public_token || null,
+          public_report_url: active.public_token ? `/shared/${active.public_token}` : null,
           tasks_count: active.Tasks?.length || 0,
-          tasks: active.Tasks?.map((t) => t.description) || [],
+          tasks: active.Tasks?.map((t) => ({
+            id: t.id,
+            description: t.description,
+            notes: t.notes || null,
+          })) || [],
         },
       };
     }
@@ -490,9 +634,10 @@ async function executeTool(
             current_active_session: {
               id: existing.id,
               title: existing.title,
+              notes: existing.notes || null,
               start_time: existing.start_time,
             },
-            instruction: 'Você pode finalizar a sessão atual com stop_timer antes de iniciar uma nova, ou adicionar tarefas nela.',
+            instruction: 'Você pode finalizar a sessão atual com stop_timer antes de iniciar uma nova, atualizar com update_active_session ou adicionar tarefas nela.',
           },
         };
       }
@@ -527,7 +672,8 @@ async function executeTool(
         tenant_id: tenantId,
         user_id: userId,
         client_id: resolvedClientId || (prevSession ? prevSession.client_id : null),
-        title: args.title?.trim() || 'Sessão de Foco',
+        title: args.title?.trim() || (prevSession ? `Continuação: ${prevSession.title}` : 'Sessão de Foco'),
+        notes: args.notes ? String(args.notes).trim() : null,
         start_time: serverStartTime,
         end_time: null,
         target_minutes: args.target_minutes ? Number(args.target_minutes) : null,
@@ -542,9 +688,68 @@ async function executeTool(
           session: {
             id: created.id,
             title: created.title,
+            notes: created.notes,
             start_time: created.start_time,
             target_minutes: created.target_minutes,
             client_id: created.client_id,
+            public_report_url: `/shared/${publicToken}`,
+          },
+        },
+        sessionUpdated: true,
+      };
+    }
+
+    case 'update_active_session': {
+      const active = await TimeSession.findOne({
+        where: { tenant_id: tenantId, user_id: userId, end_time: null },
+        include: [{ model: Client, as: 'Client' }],
+      });
+
+      if (!active) {
+        return { result: { error: 'Nenhuma sessão de cronômetro ativa no momento para atualizar.' } };
+      }
+
+      if (args.title !== undefined && typeof args.title === 'string' && args.title.trim()) {
+        active.title = args.title.trim();
+      }
+
+      if (args.notes !== undefined) {
+        active.notes = typeof args.notes === 'string' ? args.notes.trim() || null : null;
+      }
+
+      if (args.target_minutes !== undefined) {
+        active.target_minutes = args.target_minutes ? Number(args.target_minutes) : null;
+      }
+
+      if (args.client_name) {
+        const found = await Client.findOne({
+          where: {
+            tenant_id: tenantId,
+            [Op.or]: [
+              { name: { [Op.like]: `%${args.client_name.trim()}%` } },
+              { company: { [Op.like]: `%${args.client_name.trim()}%` } },
+            ],
+          },
+        });
+        if (found) {
+          active.client_id = found.id;
+        }
+      } else if (args.client_id !== undefined) {
+        active.client_id = args.client_id || null;
+      }
+
+      await active.save();
+
+      return {
+        result: {
+          success: true,
+          message: 'Sessão ativa atualizada com sucesso!',
+          session: {
+            id: active.id,
+            title: active.title,
+            notes: active.notes,
+            target_minutes: active.target_minutes,
+            client_id: active.client_id,
           },
         },
         sessionUpdated: true,
@@ -563,13 +768,21 @@ async function executeTool(
 
       const serverEndTime = new Date();
       active.end_time = serverEndTime;
+
+      // Update session notes if provided
+      const sessionNoteToSave = args.session_notes || args.notes;
+      if (sessionNoteToSave && typeof sessionNoteToSave === 'string' && sessionNoteToSave.trim()) {
+        active.notes = sessionNoteToSave.trim();
+      }
+
       await active.save();
 
-      if (args.notes && args.notes.trim()) {
+      // If a final task description was provided, add it
+      if (args.final_task && typeof args.final_task === 'string' && args.final_task.trim()) {
         await Task.create({
           tenant_id: tenantId,
           time_session_id: active.id,
-          description: args.notes.trim(),
+          description: args.final_task.trim(),
         });
       }
 
@@ -585,9 +798,11 @@ async function executeTool(
           session: {
             id: active.id,
             title: active.title,
+            notes: active.notes,
             duration_minutes: durationMin,
             end_time: serverEndTime,
             total_billable: `R$ ${billable}`,
+            public_report_url: active.public_token ? `/shared/${active.public_token}` : null,
           },
         },
         sessionUpdated: true,
@@ -621,6 +836,7 @@ async function executeTool(
         tenant_id: tenantId,
         time_session_id: targetSessionId,
         description: args.description.trim(),
+        notes: args.notes ? String(args.notes).trim() : null,
       });
 
       return {
@@ -630,6 +846,7 @@ async function executeTool(
           task: {
             id: newTask.id,
             description: newTask.description,
+            notes: newTask.notes,
             time_session_id: targetSessionId,
           },
         },
@@ -638,8 +855,8 @@ async function executeTool(
     }
 
     case 'add_multiple_tasks_to_timer': {
-      const taskList: string[] = Array.isArray(args.tasks) ? args.tasks : [];
-      if (taskList.length === 0) {
+      const rawTasks = Array.isArray(args.tasks) ? args.tasks : [];
+      if (rawTasks.length === 0) {
         return { result: { error: 'Nenhuma tarefa informada para adicionar.' } };
       }
 
@@ -666,14 +883,24 @@ async function executeTool(
       }
 
       const createdTasks = [];
-      for (const desc of taskList) {
-        if (typeof desc === 'string' && desc.trim()) {
+      for (const item of rawTasks) {
+        let desc = '';
+        let itemNotes: string | null = null;
+        if (typeof item === 'string') {
+          desc = item.trim();
+        } else if (item && typeof item === 'object') {
+          desc = String(item.description || item.task || '').trim();
+          itemNotes = item.notes ? String(item.notes).trim() : null;
+        }
+
+        if (desc) {
           const t = await Task.create({
             tenant_id: tenantId,
             time_session_id: targetSessionId,
-            description: desc.trim(),
+            description: desc,
+            notes: itemNotes,
           });
-          createdTasks.push({ id: t.id, description: t.description });
+          createdTasks.push({ id: t.id, description: t.description, notes: t.notes });
         }
       }
 
@@ -685,6 +912,187 @@ async function executeTool(
           tasks: createdTasks,
         },
         sessionUpdated: true,
+      };
+    }
+
+    case 'update_task': {
+      if (!args.task_id) {
+        return { result: { error: 'O parâmetro task_id é obrigatório.' } };
+      }
+
+      const task = await Task.findOne({
+        where: { id: args.task_id, tenant_id: tenantId },
+      });
+
+      if (!task) {
+        return { result: { error: 'Tarefa não encontrada neste workspace.' } };
+      }
+
+      if (args.description !== undefined && typeof args.description === 'string' && args.description.trim()) {
+        task.description = args.description.trim();
+      }
+
+      if (args.notes !== undefined) {
+        task.notes = typeof args.notes === 'string' ? args.notes.trim() || null : null;
+      }
+
+      await task.save();
+
+      return {
+        result: {
+          success: true,
+          message: 'Tarefa atualizada com sucesso!',
+          task: {
+            id: task.id,
+            description: task.description,
+            notes: task.notes,
+          },
+        },
+        sessionUpdated: true,
+      };
+    }
+
+    case 'delete_task': {
+      if (!args.task_id) {
+        return { result: { error: 'O parâmetro task_id é obrigatório.' } };
+      }
+
+      const task = await Task.findOne({
+        where: { id: args.task_id, tenant_id: tenantId },
+      });
+
+      if (!task) {
+        return { result: { error: 'Tarefa não encontrada.' } };
+      }
+
+      await task.destroy();
+
+      return {
+        result: {
+          success: true,
+          message: 'Tarefa removida com sucesso da sessão!',
+        },
+        sessionUpdated: true,
+      };
+    }
+
+    case 'get_public_report_link': {
+      let session = null;
+      if (args.session_id) {
+        session = await TimeSession.findOne({
+          where: { id: args.session_id, tenant_id: tenantId },
+          include: [{ model: Client, as: 'Client' }, { model: Task, as: 'Tasks' }],
+        });
+      } else {
+        // Tenta sessão ativa
+        session = await TimeSession.findOne({
+          where: { tenant_id: tenantId, user_id: userId, end_time: null },
+          include: [{ model: Client, as: 'Client' }, { model: Task, as: 'Tasks' }],
+        });
+
+        // Se não houver ativa, busca a mais recente
+        if (!session) {
+          session = await TimeSession.findOne({
+            where: { tenant_id: tenantId, user_id: userId },
+            order: [['start_time', 'DESC']],
+            include: [{ model: Client, as: 'Client' }, { model: Task, as: 'Tasks' }],
+          });
+        }
+      }
+
+      if (!session) {
+        return { result: { error: 'Nenhuma sessão encontrada para gerar o link do relatório.' } };
+      }
+
+      if (!session.public_token) {
+        session.public_token = crypto.randomBytes(16).toString('hex');
+        await session.save();
+      }
+
+      const publicPath = `/shared/${session.public_token}`;
+
+      return {
+        result: {
+          success: true,
+          session_id: session.id,
+          session_title: session.title,
+          session_notes: session.notes || null,
+          client: session.Client ? session.Client.name : 'Geral (sem cliente)',
+          tasks_count: session.Tasks?.length || 0,
+          public_token: session.public_token,
+          public_url: publicPath,
+          message: `Link público gerado: ${publicPath}. O cliente pode acompanhar as horas, tarefas e observações em tempo real e realizar a aprovação.`,
+        },
+      };
+    }
+
+    case 'suggest_session_title': {
+      let targetSessionId = args.session_id;
+      if (!targetSessionId) {
+        const active = await TimeSession.findOne({
+          where: { tenant_id: tenantId, user_id: userId, end_time: null },
+        });
+        if (!active) {
+          return { result: { error: 'Nenhuma sessão ativa encontrada para sugerir título.' } };
+        }
+        targetSessionId = active.id;
+      }
+
+      const session = await TimeSession.findOne({
+        where: { id: targetSessionId, tenant_id: tenantId },
+        include: [
+          { model: Task, as: 'Tasks' },
+          { model: Client, as: 'Client' },
+        ],
+      });
+
+      if (!session) {
+        return { result: { error: 'Sessão não encontrada.' } };
+      }
+
+      const tasks = (session as any).Tasks || [];
+      if (tasks.length === 0) {
+        return {
+          result: {
+            message: 'Nenhuma tarefa foi registrada nesta sessão ainda para sugerir um novo título.',
+            current_title: session.title,
+            notes: session.notes,
+          },
+        };
+      }
+
+      const descriptions = tasks.map((t: any) => t.description);
+      let suggested = '';
+      if (descriptions.length === 1) {
+        suggested = descriptions[0].slice(0, 50);
+      } else if (descriptions.length === 2) {
+        suggested = `${descriptions[0].slice(0, 24)} & ${descriptions[1].slice(0, 24)}`;
+      } else {
+        suggested = `${descriptions[0].slice(0, 22)}, ${descriptions[1].slice(0, 22)} (+${descriptions.length - 2})`;
+      }
+
+      if (args.auto_apply) {
+        session.title = suggested;
+        await session.save();
+        return {
+          result: {
+            success: true,
+            applied: true,
+            suggested_title: suggested,
+            message: `Título da sessão atualizado automaticamente para: "${suggested}"`,
+          },
+          sessionUpdated: true,
+        };
+      }
+
+      return {
+        result: {
+          success: true,
+          suggested_title: suggested,
+          current_title: session.title,
+          session_notes: session.notes,
+          tasks_count: tasks.length,
+        },
       };
     }
 
@@ -711,8 +1119,26 @@ async function executeTool(
 
       if (args.query && args.query.trim()) {
         const q = args.query.trim();
+
+        // Search also in tasks descriptions and task notes to find parent session
+        const matchingTasks = await Task.findAll({
+          where: {
+            tenant_id: tenantId,
+            [Op.or]: [
+              { description: { [Op.like]: `%${q}%` } },
+              { notes: { [Op.like]: `%${q}%` } },
+            ],
+          },
+          attributes: ['time_session_id'],
+          limit: 100,
+        });
+
+        const matchingSessionIds = matchingTasks.map((t) => t.time_session_id).filter(Boolean);
+
         whereClause[Op.or] = [
           { title: { [Op.like]: `%${q}%` } },
+          { notes: { [Op.like]: `%${q}%` } },
+          ...(matchingSessionIds.length > 0 ? [{ id: { [Op.in]: matchingSessionIds } }] : []),
         ];
       }
 
@@ -752,12 +1178,19 @@ async function executeTool(
         return {
           id: s.id,
           title: s.title,
+          notes: s.notes || null,
           start_time: s.start_time,
           end_time: s.end_time,
           duration_minutes: durationMin,
           client: s.Client ? `${s.Client.name} (${s.Client.company || 'PJ'})` : 'Geral (sem cliente)',
           billable_amount: billable,
-          tasks: s.Tasks?.map((t) => t.description) || [],
+          public_token: s.public_token,
+          public_report_url: s.public_token ? `/shared/${s.public_token}` : null,
+          tasks: s.Tasks?.map((t) => ({
+            id: t.id,
+            description: t.description,
+            notes: t.notes || null,
+          })) || [],
           is_active: !s.end_time,
         };
       });
@@ -782,6 +1215,7 @@ async function executeTool(
 
       const clients = await Client.findAll({
         where: whereClause,
+        include: [{ model: ClientContact, as: 'Contacts' }],
         order: [['name', 'ASC']],
       });
 
@@ -794,6 +1228,13 @@ async function executeTool(
             company: c.company,
             hourly_rate: c.hourly_rate ? `R$ ${c.hourly_rate}/h` : `Padrão (R$ ${userHourlyRate}/h)`,
             email: c.email,
+            notes: c.notes || null,
+            contacts: ((c as any).Contacts || []).map((cnt: any) => ({
+              name: cnt.name,
+              email: cnt.email,
+              role: cnt.role || null,
+              phone: cnt.phone || null,
+            })),
           })),
         },
       };
@@ -822,6 +1263,7 @@ async function executeTool(
             name: client.name,
             company: client.company,
             hourly_rate: client.hourly_rate,
+            notes: client.notes,
           },
         },
         clientsUpdated: true,
@@ -965,13 +1407,28 @@ aiRouter.post('/chat', async (req: AuthenticatedRequest, res: Response) => {
 
     // System instruction specifying role, behavior, and capabilities
     const systemInstruction = `Você é o Cronos AI, o assistente inteligente oficial deste sistema de Time Tracking, Produtividade e Faturamento Multitenant.
-Seu papel é ajudar o profissional freelancer, consultor ou equipe a:
-1. Rastrear o tempo de trabalho com precisão e iniciar/parar sessões de cronômetro com start_timer e stop_timer.
-2. Registrar tarefas realizadas em tempo real com add_task_to_timer ou add_multiple_tasks_to_timer.
-3. Analisar imagens enviadas (como capturas de tela de tickets do Jira/Trello/GitHub, checklists, mockups de design, anotações à mão, recibos ou relatórios de bugs) e extrair tarefas concretas adicionando-as diretamente ao timer!
-4. Buscar e consultar históricos de sessões, horas trabalhadas e métricas com search_history e get_financial_summary.
-5. Gerenciar clientes com list_clients e create_client.
-6. Você pode executar chamadas de função consecutivas de forma autônoma (até 60 steps) para resolver pedidos compostos pelo usuário. Por exemplo: verificar sessão ativa -> se não houver, iniciar timer com cliente -> adicionar tarefas extraídas da imagem -> confirmar o resumo para o usuário.
+Seu papel é ajudar o profissional freelancer, consultor ou equipe a gerenciar seu tempo, sessões e clientes com máxima produtividade:
+1. Controle de Cronômetro:
+   - Inicie sessões com start_timer (com título, observações gerais notes, meta de minutos target_minutes e cliente).
+   - Atualize a sessão em andamento com update_active_session (alterar título, observações gerais da sessão notes, meta ou cliente).
+   - Finalize sessões com stop_timer (podendo salvar observações finais notes e/ou registrar uma tarefa final concluída).
+2. Tarefas e Observações Detalhadas (Two-Tier Notes):
+   - Cada sessão de cronômetro possui suas observações gerais da sessão (notes) para briefing, escopo ou anotações gerais.
+   - Cada tarefa individual possui sua própria descrição e observações específicas (notes) para links, detalhes técnicos, entregáveis ou impedimentos.
+   - Adicione tarefas com add_task_to_timer ou em lote com add_multiple_tasks_to_timer (incluindo description e notes).
+   - Atualize tarefas existentes com update_task ou remova com delete_task.
+3. Compartilhamento e Relatórios Públicos:
+   - Gere e envie o link público de aprovação do cliente com get_public_report_link. O cliente pode conferir tarefas, horas e observações em tempo real.
+4. Análise Multimodal de Imagens:
+   - Analise capturas de tela (tickets Jira/Trello/GitHub, checklists, mockups, anotações à mão, recibos ou bugs) e extraia tarefas com suas respectivas observações (notes), adicionando-as diretamente ao timer!
+5. Título Inteligente:
+   - Use suggest_session_title para sugerir ou aplicar automaticamente um título profissional baseado nas tarefas e observações realizadas.
+6. Histórico, Clientes e Métricas:
+   - Pesquise sessões e tarefas com search_history (que busca em títulos, observações da sessão e tarefas/observações).
+   - Consulte ou cadastre clientes com list_clients e create_client (incluindo observações contratuais e contatos).
+   - Obtenha balanço financeiro e de horas com get_financial_summary.
+7. Execução Autônoma em Cadeia:
+   - Execute até 60 etapas autônomas consecutivas para atender solicitações compostas.
 Responda sempre em Português do Brasil com tom profissional, prestativo e objetivo, usando formatação Markdown elegante quando apropriado.`;
 
     const kiloConfig = getKiloConfig();

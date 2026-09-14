@@ -15,6 +15,7 @@ import {
   Link2,
   Building2,
   Briefcase,
+  Lock,
 } from 'lucide-react';
 import dayjs from 'dayjs';
 import { ReportData, TimeSession, Client } from '../types';
@@ -52,6 +53,16 @@ export function ReportsView({ hourlyRate, clients, onOpenPublicShare }: ReportsV
 
   // Expandable sessions
   const [expandedSessions, setExpandedSessions] = useState<Record<string, boolean>>({});
+  const [expandedSessionNotes, setExpandedSessionNotes] = useState<Record<string, boolean>>({});
+  const [expandedTaskNotes, setExpandedTaskNotes] = useState<Record<string, boolean>>({});
+
+  const toggleSessionNote = (sessionId: string) => {
+    setExpandedSessionNotes((prev) => ({ ...prev, [sessionId]: !prev[sessionId] }));
+  };
+
+  const toggleTaskNote = (taskId: string) => {
+    setExpandedTaskNotes((prev) => ({ ...prev, [taskId]: !prev[taskId] }));
+  };
 
   // Share Dialog state
   const [shareDialogOpen, setShareDialogOpen] = useState<boolean>(false);
@@ -325,13 +336,7 @@ export function ReportsView({ hourlyRate, clients, onOpenPublicShare }: ReportsV
                 {formatCurrency(reportData.summary.totalBillableAmount)}
               </div>
               <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
-                {reportData.summary.hasMultipleRates ? (
-                  <span>Soma exata das sessões por cliente/taxa</span>
-                ) : (
-                  <span>
-                    {reportData.summary.totalDecimalHours.toFixed(2)}h × {formatCurrency(reportData.summary.hourlyRate)}/h
-                  </span>
-                )}
+                Soma exata calculada por sessão/cliente
               </p>
             </CardContent>
           </Card>
@@ -343,25 +348,21 @@ export function ReportsView({ hourlyRate, clients, onOpenPublicShare }: ReportsV
                 <span className="text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider">
                   {reportData.summary.selectedClient
                     ? 'Taxa do Cliente'
-                    : reportData.summary.hasMultipleRates
-                    ? 'Taxas por Cliente'
-                    : 'Taxa Horária Aplicada'}
+                    : 'Taxa(s) por Cliente'}
                 </span>
                 <Building2 className="w-4 h-4 text-neutral-400" />
               </div>
               <div className="mt-2 text-2xl font-bold text-neutral-900 dark:text-neutral-100 font-mono">
-                {reportData.summary.hasMultipleRates && !reportData.summary.selectedClient ? (
-                  <span className="text-lg">Por Sessão</span>
+                {reportData.summary.selectedClient ? (
+                  formatCurrency(reportData.summary.selectedClient.hourly_rate ?? reportData.summary.hourlyRate)
                 ) : (
-                  formatCurrency(reportData.summary.hourlyRate)
+                  <span className="text-lg">Por Sessão / Cliente</span>
                 )}
               </div>
               <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
                 {reportData.summary.selectedClient
                   ? `Cliente: ${reportData.summary.selectedClient.name}`
-                  : reportData.summary.hasMultipleRates
-                  ? `Taxa base: ${formatCurrency(reportData.summary.defaultHourlyRate ?? reportData.summary.hourlyRate)}/h`
-                  : 'Taxa uniforme para as sessões'}
+                  : `Precificação individual aplicada em cada sessão`}
               </p>
             </CardContent>
           </Card>
@@ -431,6 +432,16 @@ export function ReportsView({ hourlyRate, clients, onOpenPublicShare }: ReportsV
                           <h4 className="font-semibold text-neutral-900 dark:text-neutral-100 text-sm">
                             {sess.title}
                           </h4>
+                          {sess.is_locked && (
+                            <Badge
+                              variant="outline"
+                              className="text-2xs gap-1 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800"
+                              title={sess.locked_reason || 'Sessão aprovada no relatório e bloqueada para edições'}
+                            >
+                              <Lock className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+                              <span>Aprovada</span>
+                            </Badge>
+                          )}
                           {metrics.isActive && (
                             <Badge variant="amber" className="text-2xs uppercase">
                               Em Andamento
@@ -447,7 +458,36 @@ export function ReportsView({ hourlyRate, clients, onOpenPublicShare }: ReportsV
                               {sess.Client.name}
                             </Badge>
                           )}
+                          {sess.hourly_rate !== null && sess.hourly_rate !== undefined && (
+                            <Badge
+                              variant="outline"
+                              className="text-2xs font-mono text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800 bg-indigo-50/50 dark:bg-indigo-950/30"
+                              title="Taxa personalizada definida para esta sessão"
+                            >
+                              R$ {Number(sess.hourly_rate).toFixed(2)}/h
+                            </Badge>
+                          )}
+                          {sess.notes && (
+                            <button
+                              type="button"
+                              onClick={() => toggleSessionNote(sess.id)}
+                              className="inline-flex items-center gap-1 text-2xs font-semibold px-2 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 transition-colors cursor-pointer"
+                              title="Clique para exibir ou ocultar as observações da sessão de cronômetro"
+                            >
+                              <FileText className="w-2.5 h-2.5 text-indigo-600 dark:text-indigo-400" />
+                              <span>Observação da Sessão</span>
+                            </button>
+                          )}
                         </div>
+
+                        {sess.notes && expandedSessionNotes[sess.id] && (
+                          <div className="mt-1.5 p-2 rounded-md bg-indigo-50/80 dark:bg-indigo-950/40 border border-indigo-200/70 dark:border-indigo-800/50 text-xs text-indigo-950 dark:text-indigo-200 whitespace-pre-wrap leading-relaxed shadow-2xs">
+                            <span className="font-semibold text-2xs text-indigo-800 dark:text-indigo-300 block mb-0.5 uppercase tracking-wide">
+                              Observações da sessão de cronômetro:
+                            </span>
+                            {sess.notes}
+                          </div>
+                        )}
 
                         <div className="flex items-center gap-2 text-xs text-neutral-500 dark:text-neutral-400 flex-wrap">
                           <span>{formatDateTime(sess.start_time)}</span>
@@ -518,10 +558,33 @@ export function ReportsView({ hourlyRate, clients, onOpenPublicShare }: ReportsV
                             {taskList.map((t) => (
                               <li
                                 key={t.id}
-                                className="text-xs text-neutral-700 dark:text-neutral-300 flex items-start gap-2"
+                                className="text-xs text-neutral-700 dark:text-neutral-300"
                               >
-                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
-                                <span>{t.description}</span>
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className="flex items-start gap-2 flex-1 min-w-0">
+                                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
+                                    <span className="leading-relaxed break-words">{t.description}</span>
+                                  </div>
+                                  {t.notes && (
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleTaskNote(t.id)}
+                                      className="shrink-0 inline-flex items-center gap-1 text-2xs font-semibold px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 hover:bg-amber-100 dark:hover:bg-amber-900/60 transition-colors cursor-pointer"
+                                      title="Clique para exibir ou ocultar a observação desta tarefa"
+                                    >
+                                      <FileText className="w-2.5 h-2.5 text-amber-600 dark:text-amber-400" />
+                                      <span>Observação</span>
+                                    </button>
+                                  )}
+                                </div>
+                                {t.notes && expandedTaskNotes[t.id] && (
+                                  <div className="mt-1.5 ml-5 p-2 rounded-md bg-amber-50/80 dark:bg-amber-950/40 border border-amber-200/70 dark:border-amber-800/50 text-xs text-amber-950 dark:text-amber-200 whitespace-pre-wrap leading-relaxed">
+                                    <span className="font-semibold text-2xs text-amber-800 dark:text-amber-300 block mb-0.5 uppercase tracking-wide">
+                                      Observação da tarefa:
+                                    </span>
+                                    {t.notes}
+                                  </div>
+                                )}
                               </li>
                             ))}
                           </ul>
@@ -531,6 +594,23 @@ export function ReportsView({ hourlyRate, clients, onOpenPublicShare }: ReportsV
                   </div>
                 );
               })}
+            </div>
+          )}
+
+          {/* Footer Summary in Statement */}
+          {reportData && reportData.sessions.length > 0 && (
+            <div className="p-4 sm:p-5 bg-neutral-50/80 dark:bg-neutral-850/80 border-t border-neutral-200 dark:border-neutral-800 flex flex-col sm:flex-row items-center justify-between text-xs text-neutral-500 dark:text-neutral-400 gap-3">
+              <span>
+                Total de {reportData.sessions.length} {reportData.sessions.length === 1 ? 'sessão listada' : 'sessões listadas'} • Precificação calculada por sessão/cliente
+              </span>
+              <div className="flex items-center gap-4 flex-wrap">
+                <span className="font-mono text-neutral-700 dark:text-neutral-300">
+                  Horas: <strong>{reportData.summary.totalDecimalHours.toFixed(2)}h</strong>
+                </span>
+                <div className="font-medium text-neutral-900 dark:text-neutral-100">
+                  Total Final a Faturar: <strong className="text-emerald-700 dark:text-emerald-400 text-base font-mono ml-1">{formatCurrency(reportData.summary.totalBillableAmount)}</strong>
+                </div>
+              </div>
             </div>
           )}
         </CardContent>

@@ -5,14 +5,19 @@ import {
   Building2,
   DollarSign,
   Shield,
-  Sparkles,
+  Bell,
+  BellRing,
+  BellOff,
+  CheckCircle2,
 } from 'lucide-react';
 import { User, Tenant } from '../types';
 import { formatCurrency } from '../utils/format';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
+import { Badge } from './ui/badge';
 import { useToast } from './ui/toast';
+import { requestNotificationPermission, showNativeNotification } from '../lib/notifications';
 
 interface SettingsViewProps {
   user: User | null;
@@ -38,6 +43,55 @@ export function SettingsView({
     user?.default_hourly_rate ? user.default_hourly_rate.toString() : '150'
   );
   const [tenantName, setTenantName] = useState(tenant?.name || '');
+  const [notificationPermission, setNotificationPermission] = useState<string>(() => {
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      return Notification.permission;
+    }
+    return 'unsupported';
+  });
+
+  const handleToggleNotifications = async () => {
+    if (!('Notification' in window)) {
+      addToast({
+        title: 'Não suportado',
+        description: 'Seu navegador atual não possui suporte à API de notificações.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    if (notificationPermission === 'granted') {
+      showNativeNotification('TimeTracker', {
+        body: 'Notificações ativas! Você será alertado quando metas de tempo forem atingidas.',
+      });
+      addToast({
+        title: 'Notificação enviada',
+        description: 'Um alerta de teste foi disparado com sucesso no seu dispositivo.',
+        variant: 'success',
+      });
+      return;
+    }
+
+    const granted = await requestNotificationPermission();
+    setNotificationPermission(Notification.permission);
+
+    if (granted) {
+      addToast({
+        title: 'Notificações Ativadas!',
+        description: 'Você receberá alertas nativos quando as metas de tempo de suas sessões forem atingidas.',
+        variant: 'success',
+      });
+      showNativeNotification('TimeTracker - Notificações Ativadas', {
+        body: 'Tudo pronto! Você será alertado quando atingir a meta da sua sessão.',
+      });
+    } else {
+      addToast({
+        title: 'Permissão não concedida',
+        description: 'As notificações não foram autorizadas. Verifique as permissões nas configurações do seu navegador.',
+        variant: 'destructive',
+      });
+    }
+  };
 
   useEffect(() => {
     if (user) {
@@ -188,6 +242,84 @@ export function SettingsView({
                   {tenant?.id || user?.tenant_id}
                 </code>
               </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Card 4: Notificações do Sistema */}
+        <Card className="border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shadow-2xs">
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base font-bold text-neutral-900 dark:text-neutral-100 flex items-center gap-2">
+                <Bell className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+                <span>Notificações do Navegador</span>
+              </CardTitle>
+              {notificationPermission === 'granted' && (
+                <Badge variant="success" className="gap-1">
+                  <CheckCircle2 className="w-3 h-3" />
+                  Ativas
+                </Badge>
+              )}
+              {notificationPermission === 'default' && (
+                <Badge variant="outline">Pendente</Badge>
+              )}
+              {notificationPermission === 'denied' && (
+                <Badge variant="destructive" className="gap-1">
+                  <BellOff className="w-3 h-3" />
+                  Bloqueadas
+                </Badge>
+              )}
+              {notificationPermission === 'unsupported' && (
+                <Badge variant="outline">Não Suportado</Badge>
+              )}
+            </div>
+            <CardDescription className="text-xs text-neutral-500 dark:text-neutral-400">
+              Receba alertas nativos do dispositivo quando as metas de tempo de suas sessões forem atingidas.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-850">
+              <div className="space-y-0.5">
+                <p className="text-xs font-semibold text-neutral-800 dark:text-neutral-200">
+                  {notificationPermission === 'granted'
+                    ? 'Alertas em segundo plano habilitados'
+                    : notificationPermission === 'denied'
+                    ? 'Notificações bloqueadas nas permissões do navegador'
+                    : notificationPermission === 'unsupported'
+                    ? 'Navegador sem suporte a notificações'
+                    : 'Alertas em segundo plano desativados'}
+                </p>
+                <p className="text-2xs text-neutral-500 dark:text-neutral-400">
+                  {notificationPermission === 'granted'
+                    ? 'Seu navegador está autorizado a emitir notificações do sistema operacional.'
+                    : notificationPermission === 'denied'
+                    ? 'Para autorizar, acerte as permissões do site na barra de endereços do navegador.'
+                    : notificationPermission === 'unsupported'
+                    ? 'Este navegador não implementa a API nativa de notificações.'
+                    : 'Clique no botão ao lado para autorizar alertas visuais e sonoros de tempo.'}
+                </p>
+              </div>
+
+              {notificationPermission !== 'denied' && notificationPermission !== 'unsupported' && (
+                <Button
+                  type="button"
+                  variant={notificationPermission === 'granted' ? 'outline' : 'default'}
+                  onClick={handleToggleNotifications}
+                  className="shrink-0 gap-1.5 cursor-pointer text-xs"
+                >
+                  {notificationPermission === 'granted' ? (
+                    <>
+                      <BellRing className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                      <span>Testar Notificação</span>
+                    </>
+                  ) : (
+                    <>
+                      <Bell className="w-3.5 h-3.5" />
+                      <span>Ativar Notificações</span>
+                    </>
+                  )}
+                </Button>
+              )}
             </div>
           </CardContent>
         </Card>

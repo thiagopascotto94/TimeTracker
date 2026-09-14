@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { Op } from 'sequelize';
-import { SharedReport, TimeSession, Task, Tenant, Client } from '../db';
+import bcrypt from 'bcryptjs';
+import { SharedReport, TimeSession, Task, Tenant, Client, ClientContact } from '../db';
 import { calculateSessionMetrics } from './reports';
 
 export const publicRouter = Router();
@@ -109,8 +110,8 @@ publicRouter.get('/shared/:token', async (req: Request, res: Response) => {
     const appliedRates = new Set<number>();
 
     const mappedSessions = sessions.map((sess) => {
-      // O valor da sessão é calculado por sessão/cliente
-      const sessionRate = sess.Client?.hourly_rate ?? hourlyRate;
+      // O valor da sessão é calculado por sessão/cliente com prioridade para taxa editada na sessão
+      const sessionRate = sess.hourly_rate ?? (sess.Client?.hourly_rate ?? hourlyRate);
       appliedRates.add(sessionRate);
 
       const metrics = calculateSessionMetrics(sess, sessionRate);
@@ -122,9 +123,14 @@ publicRouter.get('/shared/:token', async (req: Request, res: Response) => {
       return {
         id: sess.id,
         title: sess.title,
+        notes: sess.notes,
         start_time: sess.start_time,
         end_time: sess.end_time,
         target_minutes: sess.target_minutes,
+        hourly_rate: sess.hourly_rate,
+        is_locked: sess.is_locked || false,
+        locked_at: sess.locked_at,
+        locked_reason: sess.locked_reason,
         client: sess.Client
           ? {
               id: sess.Client.id,
@@ -135,6 +141,7 @@ publicRouter.get('/shared/:token', async (req: Request, res: Response) => {
         tasks: (sess.Tasks || []).map((t) => ({
           id: t.id,
           description: t.description,
+          notes: t.notes,
           created_at: t.created_at,
         })),
         metrics,
@@ -177,26 +184,18 @@ publicRouter.get('/shared/:token', async (req: Request, res: Response) => {
 });
 
 // POST /api/public/shared/:token/review
-// Process approval or rejection with code validation and audit tracking (IP, timestamp, approver name)
+// Process approval or rejection with contact authentication (email + password), first-access password setup, or legacy approval_code
 publicRouter.post('/shared/:token/review', async (req: Request, res: Response) => {
   try {
     const { token } = req.params;
-    const { action, approval_code, approver_name } = req.body;
+    const { action, email, password, new_password, approval_code, approver_name } = req.body;
 
     if (!token) {
       return res.status(400).json({ error: 'Token não informado' });
     }
 
     if (!action || !['approve', 'reject'].includes(action)) {
-      return res.status(400).json({ error: 'Ação inválida' });
-    }
-
-    if (!approval_code || !approval_code.trim()) {
-      return res.status(400).json({ error: 'Código de aprovação é obrigatório' });
-    }
-
-    if (!approver_name || !approver_name.trim()) {
-      return res.status(400).json({ error: 'Nome de quem está aprovando/rejeitando é obrigatório' });
+      return res.status(400).json({ error: 'Ação inválida (deve ser approve ou reject)' });
     }
 
     const shared = await SharedReport.findOne({ where: { token } });
@@ -204,8 +203,113 @@ publicRouter.post('/shared/:token/review', async (req: Request, res: Response) =
       return res.status(404).json({ error: 'Relatório compartilhado não encontrado' });
     }
 
-    if (shared.approval_code.trim().toUpperCase() !== approval_code.trim().toUpperCase()) {
-      return res.status(400).json({ error: 'Código de aprovação incorreto.' });
+    if (!shared.allow_approval) {
+      return res.status(403).json({ error: 'A aprovação interativa está desativada para este relatório.' });
+    }
+
+    if (shared.status && shared.status !== 'pending') {
+      return res.status(400).json({
+        error: `Este relatório já foi avaliado anteriormente (${shared.status === 'approved' ? 'Aprovado' : 'Rejeitado'}).`,
+      });
+    }
+
+    let approverIdentity = '';
+    let passwordChangedOnLogin = false;
+
+    // Option A: Contact credentials flow (Preferred & default)
+    if (email && email.trim()) {
+      const normalizedEmail = email.trim().toLowerCase();
+
+      if (!password) {
+        return res.status(400).json({ error: 'Informe a senha de acesso do contato.' });
+      }
+
+      // Find contact: first for specific client, then fallback to tenant
+      let contact: ClientContact | null = null;
+      if (shared.client_id) {
+        contact = await ClientContact.findOne({
+          where: {
+            email: normalizedEmail,
+            client_id: shared.client_id,
+          },
+        });
+      }
+
+      if (!contact) {
+        contact = await ClientContact.findOne({
+          where: {
+            email: normalizedEmail,
+            tenant_id: shared.tenant_id,
+          },
+        });
+      }
+
+      if (!contact) {
+        return res.status(401).json({
+          error: 'Nenhum contato encontrado com este e-mail para este cliente/workspace.',
+        });
+      }
+
+      // Verify current / temporary password
+      const isValidPassword = await bcrypt.compare(password, contact.password_hash);
+      if (!isValidPassword) {
+        return res.status(401).json({
+          error: 'Senha incorreta. Verifique suas credenciais de acesso.',
+        });
+      }
+
+      // Check first access (must_change_password flag)
+      if (contact.must_change_password) {
+        // If client hasn't sent new_password yet, inform that first-access requires new password
+        if (!new_password || !new_password.trim()) {
+          return res.json({
+            requires_new_password: true,
+            contact_id: contact.id,
+            contact_name: contact.name,
+            contact_email: contact.email,
+            message: 'Primeiro acesso detectado com senha temporária. Por favor, cadastre uma nova senha pessoal para concluir a aprovação.',
+          });
+        }
+
+        // Validate new password
+        const cleanNewPassword = new_password.trim();
+        if (cleanNewPassword.length < 6) {
+          return res.status(400).json({
+            error: 'A nova senha deve possuir pelo menos 6 caracteres.',
+          });
+        }
+
+        if (cleanNewPassword === password) {
+          return res.status(400).json({
+            error: 'A nova senha deve ser diferente da senha temporária inicial.',
+          });
+        }
+
+        // Hash new password and update contact
+        const salt = await bcrypt.genSalt(10);
+        contact.password_hash = await bcrypt.hash(cleanNewPassword, salt);
+        contact.must_change_password = false;
+        contact.last_login_at = new Date();
+        await contact.save();
+        passwordChangedOnLogin = true;
+      } else {
+        contact.last_login_at = new Date();
+        await contact.save();
+      }
+
+      const roleSuffix = contact.role ? ` - ${contact.role}` : '';
+      approverIdentity = `${contact.name} (${contact.email}${roleSuffix})`;
+    }
+    // Option B: Legacy fallback using approval_code
+    else if (approval_code && approval_code.trim()) {
+      if (shared.approval_code.trim().toUpperCase() !== approval_code.trim().toUpperCase()) {
+        return res.status(400).json({ error: 'Código de aprovação incorreto.' });
+      }
+      approverIdentity = approver_name && approver_name.trim() ? approver_name.trim() : 'Aprovador Autorizado';
+    } else {
+      return res.status(400).json({
+        error: 'Informe seu e-mail e senha de contato para realizar a aprovação.',
+      });
     }
 
     const clientIp = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
@@ -214,10 +318,44 @@ publicRouter.post('/shared/:token/review', async (req: Request, res: Response) =
 
     await shared.update({
       status: newStatus,
-      approved_by: approver_name.trim(),
+      approved_by: approverIdentity,
       approved_at: now,
       approval_ip: clientIp,
     });
+
+    // Na aprovação do relatório, trava as sessões correspondentes no banco de dados para que nada mais possa ser alterado
+    if (action === 'approve') {
+      const sessionWhere: any = { tenant_id: shared.tenant_id };
+      if (shared.session_id) {
+        sessionWhere.id = shared.session_id;
+      } else {
+        if (shared.client_id) {
+          sessionWhere.client_id = shared.client_id;
+        }
+        if (shared.start_date || shared.end_date) {
+          sessionWhere.start_time = {};
+          if (shared.start_date) {
+            const start = new Date(shared.start_date);
+            start.setHours(0, 0, 0, 0);
+            sessionWhere.start_time[Op.gte] = start;
+          }
+          if (shared.end_date) {
+            const end = new Date(shared.end_date);
+            end.setHours(23, 59, 59, 999);
+            sessionWhere.start_time[Op.lte] = end;
+          }
+        }
+      }
+
+      await TimeSession.update(
+        {
+          is_locked: true,
+          locked_at: now,
+          locked_reason: `Aprovado via relatório "${shared.title}" por ${approverIdentity}`,
+        },
+        { where: sessionWhere }
+      );
+    }
 
     return res.json({
       message: action === 'approve' ? 'Relatório aprovado com sucesso!' : 'Relatório rejeitado com sucesso.',
@@ -225,6 +363,7 @@ publicRouter.post('/shared/:token/review', async (req: Request, res: Response) =
       approved_by: shared.approved_by,
       approved_at: shared.approved_at,
       approval_ip: shared.approval_ip,
+      password_changed_on_login: passwordChangedOnLogin,
     });
   } catch (err: any) {
     console.error('Error reviewing shared report:', err);

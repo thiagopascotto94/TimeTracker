@@ -4,6 +4,19 @@ export interface Tenant {
   created_at?: string;
 }
 
+export interface ClientContact {
+  id: string;
+  tenant_id?: string;
+  client_id: string;
+  name: string;
+  email: string;
+  role?: string | null;
+  phone?: string | null;
+  must_change_password: boolean;
+  last_login_at?: string | null;
+  created_at?: string;
+}
+
 export interface Client {
   id: string;
   tenant_id: string;
@@ -12,6 +25,8 @@ export interface Client {
   email?: string | null;
   hourly_rate?: number | null;
   notes?: string | null;
+  contacts?: ClientContact[];
+  Contacts?: ClientContact[];
   created_at?: string;
 }
 
@@ -28,6 +43,7 @@ export interface TaskItem {
   tenant_id: string;
   time_session_id: string;
   description: string;
+  notes?: string | null;
   created_at?: string;
 }
 
@@ -44,11 +60,16 @@ export interface TimeSession {
   user_id: string;
   client_id?: string | null;
   title: string;
+  notes?: string | null;
   start_time: string;
   end_time?: string | null;
   target_minutes?: number | null;
   previous_session_id?: string | null;
   public_token?: string | null;
+  hourly_rate?: number | null;
+  is_locked?: boolean;
+  locked_at?: string | null;
+  locked_reason?: string | null;
   Client?: Client | null;
   client?: Client | null;
   Tasks?: TaskItem[];
@@ -80,7 +101,8 @@ export interface ReportSummary {
   selectedClient?: {
     id: string;
     name: string;
-    hourlyRate: number;
+    hourlyRate?: number;
+    hourly_rate?: number;
   } | null;
 }
 
@@ -111,6 +133,7 @@ export interface PublicSharedReport {
   sessions: {
     id: string;
     title: string;
+    notes?: string | null;
     start_time: string;
     end_time?: string | null;
     target_minutes?: number | null;
@@ -122,6 +145,7 @@ export interface PublicSharedReport {
     tasks: {
       id: string;
       description: string;
+      notes?: string | null;
       created_at?: string;
     }[];
     metrics: {

@@ -13,7 +13,6 @@ import { PublicReportView } from './components/PublicReportView';
 import { AuthModal } from './components/AuthModal';
 import { LoginView } from './components/LoginView';
 import { AiAssistantView } from './components/AiAssistantView';
-import { PWANotificationBanner } from './components/PWANotificationBanner';
 import { formatCurrency, formatDurationHuman } from './utils/format';
 import { apiFetch } from './utils/api';
 
@@ -165,6 +164,7 @@ function AppContent() {
   // Handler: Start Session (RF03)
   const handleStartSession = async (data: {
     title: string;
+    notes?: string | null;
     target_minutes: number | null;
     previous_session_id: string | null;
     client_id: string | null;
@@ -234,14 +234,46 @@ function AppContent() {
     }
   };
 
+  // Handler: Update Session Notes while running
+  const handleUpdateSessionNotes = async (sessionId: string, newNotes: string) => {
+    try {
+      const res = await apiFetch(`/api/sessions/${sessionId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notes: newNotes }),
+      });
+
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || 'Erro ao atualizar observação da sessão');
+      }
+
+      const resData = await res.json();
+      setActiveSession((prev) => (prev ? { ...prev, notes: resData.session.notes } : null));
+      addToast({
+        title: 'Observação atualizada',
+        description: 'Observação da sessão de cronômetro salva com sucesso.',
+        variant: 'success',
+      });
+      fetchSessions();
+    } catch (err: any) {
+      addToast({
+        title: 'Erro ao alterar observação',
+        description: err.message,
+        variant: 'destructive',
+      });
+      throw err;
+    }
+  };
+
   // Handler: Stop Session (RF03)
-  const handleStopSession = async (sessionId: string, newTitle?: string) => {
+  const handleStopSession = async (sessionId: string, newTitle?: string, newNotes?: string) => {
     try {
       setLoading(true);
       const res = await apiFetch(`/api/sessions/${sessionId}/stop`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: newTitle }),
+        body: JSON.stringify({ title: newTitle, notes: newNotes }),
       });
 
       if (!res.ok) {
@@ -282,7 +314,7 @@ function AppContent() {
   };
 
   // Handler: Add Task in Real-Time (RF05)
-  const handleAddTask = async (sessionId: string, description: string) => {
+  const handleAddTask = async (sessionId: string, description: string, notes?: string) => {
     try {
       const res = await apiFetch('/api/tasks', {
         method: 'POST',
@@ -290,6 +322,7 @@ function AppContent() {
         body: JSON.stringify({
           time_session_id: sessionId,
           description,
+          notes,
         }),
       });
 
@@ -323,6 +356,53 @@ function AppContent() {
         description: err.message,
         variant: 'destructive',
       });
+    }
+  };
+
+  // Handler: Update Task Notes
+  const handleUpdateTaskNotes = async (taskId: string, notes: string) => {
+    try {
+      const res = await apiFetch(`/api/tasks/${taskId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notes }),
+      });
+
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || 'Erro ao atualizar observação da tarefa');
+      }
+
+      const resData = await res.json();
+      const updatedTask: TaskItem = resData.task;
+
+      // Update active session locally if this task is in it
+      setActiveSession((prev) => {
+        if (!prev) return null;
+        const currentTasks = prev.Tasks || prev.tasks || [];
+        const updated = currentTasks.map((t) => (t.id === taskId ? { ...t, notes: updatedTask.notes } : t));
+        return {
+          ...prev,
+          Tasks: updated,
+          tasks: updated,
+        };
+      });
+
+      // Also refresh sessions list in background
+      fetchSessions();
+
+      addToast({
+        title: 'Observação salva',
+        description: 'Observação da tarefa atualizada com sucesso.',
+        variant: 'success',
+      });
+    } catch (err: any) {
+      addToast({
+        title: 'Erro ao salvar observação',
+        description: err.message,
+        variant: 'destructive',
+      });
+      throw err;
     }
   };
 
@@ -415,6 +495,57 @@ function AppContent() {
     }
   };
 
+  // Handler: Update Session (Title, Hourly Rate, Notes, Tasks) from History
+  const handleUpdateSession = async (
+    sessionId: string,
+    data: {
+      title?: string;
+      hourly_rate?: number | null;
+      notes?: string | null;
+      client_id?: string | null;
+      tasks?: Array<{ id?: string; description: string; notes?: string | null; is_deleted?: boolean }>;
+    }
+  ) => {
+    try {
+      const res = await apiFetch(`/api/sessions/${sessionId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || 'Erro ao atualizar dados da sessão');
+      }
+
+      const resData = await res.json();
+      const updatedSession: TimeSession = resData.session;
+
+      // Update sessions state
+      setSessions((prev) =>
+        prev.map((s) => (s.id === sessionId ? { ...s, ...updatedSession } : s))
+      );
+
+      // If active session matches, keep it synced
+      if (activeSession?.id === sessionId) {
+        setActiveSession((prev) => (prev ? { ...prev, ...updatedSession } : null));
+      }
+
+      addToast({
+        title: 'Sessão Atualizada',
+        description: 'Dados da sessão e tarefas salvos com sucesso.',
+        variant: 'success',
+      });
+    } catch (err: any) {
+      addToast({
+        title: 'Não foi possível atualizar',
+        description: err.message,
+        variant: 'destructive',
+      });
+      throw err;
+    }
+  };
+
   // Handler: Update User Profile & Hourly Rate (RF07 / Settings)
   const handleUpdateProfile = async (data: {
     name: string;
@@ -495,7 +626,6 @@ function AppContent() {
 
   return (
     <div className="min-h-screen bg-neutral-50 dark:bg-neutral-950 text-neutral-900 dark:text-neutral-100 flex flex-col font-sans transition-colors">
-      <PWANotificationBanner />
       {/* Top Navigation */}
       <Navbar
         activeTab={activeTab}
@@ -521,7 +651,9 @@ function AppContent() {
                 onStartSession={handleStartSession}
                 onStopSession={handleStopSession}
                 onUpdateSessionTitle={handleUpdateSessionTitle}
+                onUpdateSessionNotes={handleUpdateSessionNotes}
                 onAddTask={handleAddTask}
+                onUpdateTaskNotes={handleUpdateTaskNotes}
                 onDeleteTask={handleDeleteTask}
                 loading={loading}
               />
@@ -546,6 +678,7 @@ function AppContent() {
                 onResumeSession={handleResumeSession}
                 onDeleteSession={handleDeleteSession}
                 onShareSession={handleShareSession}
+                onUpdateSession={handleUpdateSession}
                 loading={loading}
               />
             )}

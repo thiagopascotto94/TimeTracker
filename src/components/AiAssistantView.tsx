@@ -23,6 +23,11 @@ import {
   User as UserIcon,
   Copy,
   Check,
+  FileText,
+  Share2,
+  Users,
+  UserPlus,
+  Edit3,
 } from 'lucide-react';
 import { User, Tenant, TimeSession, AiChatMessage, AiImageAttachment, AiStep } from '../types';
 import { Button } from './ui/button';
@@ -292,14 +297,19 @@ export function AiAssistantView({
   // Quick action templates
   const quickActions = [
     {
-      label: 'Status do Timer',
-      prompt: 'Qual é o status da minha sessão ativa de cronômetro no momento?',
+      label: 'Status do Timer & Tarefas',
+      prompt: 'Qual é o status da minha sessão ativa de cronômetro, suas observações e tarefas no momento?',
       icon: Clock,
     },
     {
-      label: 'Iniciar Timer Rápido',
-      prompt: 'Inicie uma sessão de cronômetro com o título "Desenvolvimento de Recursos" com meta de 60 minutos.',
+      label: 'Iniciar Timer com Observações',
+      prompt: 'Inicie uma sessão de cronômetro com o título "Desenvolvimento de Recursos", meta de 60 min e adicione observações com os objetivos principais.',
       icon: Play,
+    },
+    {
+      label: 'Link de Relatório Público',
+      prompt: 'Gere o link público de compartilhamento da sessão para envio ao cliente para aprovação.',
+      icon: Share2,
     },
     {
       label: 'Resumo Financeiro do Mês',
@@ -307,9 +317,14 @@ export function AiAssistantView({
       icon: Sparkles,
     },
     {
-      label: 'Buscar Sessões Recentes',
-      prompt: 'Busque no histórico as últimas 5 sessões registradas e resuma as tarefas de cada uma.',
+      label: 'Buscar Sessões no Histórico',
+      prompt: 'Busque no histórico as últimas sessões registradas com suas tarefas e observações detalhadas.',
       icon: Search,
+    },
+    {
+      label: 'Sugerir Título Inteligente',
+      prompt: 'Analise as tarefas e observações da minha sessão ativa e sugira um título executivo apropriado.',
+      icon: Edit3,
     },
   ];
 
@@ -526,6 +541,9 @@ export function AiAssistantView({
                           if (step.tool === 'start_timer') {
                             toolLabel = 'Iniciar Cronômetro';
                             toolIcon = Play;
+                          } else if (step.tool === 'update_active_session') {
+                            toolLabel = 'Atualizar Sessão Ativa';
+                            toolIcon = Edit3;
                           } else if (step.tool === 'stop_timer') {
                             toolLabel = 'Finalizar Cronômetro';
                             toolIcon = Square;
@@ -535,12 +553,30 @@ export function AiAssistantView({
                           } else if (step.tool === 'add_multiple_tasks_to_timer') {
                             toolLabel = 'Adicionar Múltiplas Tarefas';
                             toolIcon = PlusCircle;
+                          } else if (step.tool === 'update_task') {
+                            toolLabel = 'Atualizar Tarefa';
+                            toolIcon = Edit3;
+                          } else if (step.tool === 'delete_task') {
+                            toolLabel = 'Remover Tarefa';
+                            toolIcon = Trash2;
+                          } else if (step.tool === 'get_public_report_link') {
+                            toolLabel = 'Link do Relatório Público';
+                            toolIcon = Share2;
+                          } else if (step.tool === 'suggest_session_title') {
+                            toolLabel = 'Sugerir Título';
+                            toolIcon = Sparkles;
                           } else if (step.tool === 'search_history') {
                             toolLabel = 'Consultar Histórico';
                             toolIcon = Search;
                           } else if (step.tool === 'get_active_session') {
                             toolLabel = 'Verificar Sessão Ativa';
                             toolIcon = Clock;
+                          } else if (step.tool === 'list_clients') {
+                            toolLabel = 'Listar Clientes';
+                            toolIcon = Users;
+                          } else if (step.tool === 'create_client') {
+                            toolLabel = 'Cadastrar Cliente';
+                            toolIcon = UserPlus;
                           } else if (step.tool === 'get_financial_summary') {
                             toolLabel = 'Resumo Financeiro';
                             toolIcon = Sparkles;

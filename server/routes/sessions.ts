@@ -76,11 +76,11 @@ sessionsRouter.get('/', async (req: AuthenticatedRequest, res: Response) => {
 });
 
 // POST /api/sessions/start
-// Inicia o timer. Recebe target_minutes, previous_session_id e client_id (opcionais).
+// Inicia o timer. Recebe target_minutes, previous_session_id, client_id e notes (opcionais).
 // Retorna o start_time oficial gerado pelo servidor.
 sessionsRouter.post('/start', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { target_minutes, previous_session_id, title, client_id } = req.body;
+    const { target_minutes, previous_session_id, title, client_id, notes } = req.body;
 
     // Check if there is already an active session
     const existingActive = await TimeSession.findOne({
@@ -117,6 +117,7 @@ sessionsRouter.post('/start', async (req: AuthenticatedRequest, res: Response) =
       user_id: req.userId!,
       client_id: client_id || (prevSession ? prevSession.client_id : null),
       title: title?.trim() || (prevSession ? `Continuação: ${prevSession.title}` : 'Sessão de Foco'),
+      notes: notes ? String(notes).trim() : null,
       start_time: serverStartTime,
       end_time: null,
       target_minutes: target_minutes ? Number(target_minutes) : null,
@@ -144,11 +145,11 @@ sessionsRouter.post('/start', async (req: AuthenticatedRequest, res: Response) =
 });
 
 // PATCH /api/sessions/:id
-// Permite atualizar dados da sessão em andamento, como o título
+// Permite atualizar dados da sessão (título, valor da hora, observações e tarefas)
 sessionsRouter.patch('/:id', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const { title, client_id, target_minutes } = req.body;
+    const { title, client_id, target_minutes, notes, hourly_rate, tasks } = req.body;
 
     const session = await TimeSession.findOne({
       where: {
@@ -167,9 +168,22 @@ sessionsRouter.patch('/:id', async (req: AuthenticatedRequest, res: Response) =>
       return res.status(404).json({ error: 'Sessão não encontrada' });
     }
 
+    // Variável controlada pelo banco de dados: se a sessão estiver bloqueada (aprovada), nada pode ser alterado
+    if (session.is_locked) {
+      return res.status(403).json({
+        error: 'Esta sessão está aprovada e bloqueada no banco de dados. Nenhuma alteração é permitida.',
+      });
+    }
+
     if (title !== undefined) {
-      const trimmed = title.trim();
+      const trimmed = typeof title === 'string' ? title.trim() : '';
       session.title = trimmed || 'Sessão de Foco';
+    }
+    if (notes !== undefined) {
+      session.notes = typeof notes === 'string' ? notes.trim() || null : null;
+    }
+    if (hourly_rate !== undefined) {
+      session.hourly_rate = hourly_rate === null || hourly_rate === '' ? null : Number(hourly_rate);
     }
     if (client_id !== undefined) {
       session.client_id = client_id || null;
@@ -180,9 +194,57 @@ sessionsRouter.patch('/:id', async (req: AuthenticatedRequest, res: Response) =>
 
     await session.save();
 
+    // Se tarefas foram fornecidas para atualização em lote
+    if (Array.isArray(tasks)) {
+      for (const t of tasks) {
+        if (t.id && t.is_deleted) {
+          await Task.destroy({
+            where: {
+              id: t.id,
+              time_session_id: session.id,
+              tenant_id: req.tenantId!,
+            },
+          });
+        } else if (t.id) {
+          const updateData: any = {};
+          if (t.description !== undefined && typeof t.description === 'string') {
+            updateData.description = t.description.trim() || 'Tarefa';
+          }
+          if (t.notes !== undefined) {
+            updateData.notes = typeof t.notes === 'string' ? t.notes.trim() || null : null;
+          }
+          if (Object.keys(updateData).length > 0) {
+            await Task.update(updateData, {
+              where: {
+                id: t.id,
+                time_session_id: session.id,
+                tenant_id: req.tenantId!,
+              },
+            });
+          }
+        } else if (t.description && String(t.description).trim()) {
+          await Task.create({
+            tenant_id: req.tenantId!,
+            time_session_id: session.id,
+            description: String(t.description).trim(),
+            notes: t.notes ? String(t.notes).trim() : null,
+          });
+        }
+      }
+    }
+
+    // Recarregar sessão com associações atualizadas
+    const updatedSession = await TimeSession.findByPk(session.id, {
+      include: [
+        { model: Task, as: 'Tasks' },
+        { model: TimeSession, as: 'PreviousSession' },
+        { model: Client, as: 'Client' },
+      ],
+    });
+
     return res.json({
       message: 'Sessão atualizada com sucesso',
-      session,
+      session: updatedSession,
     });
   } catch (err: any) {
     console.error('Error updating session:', err);
@@ -191,11 +253,11 @@ sessionsRouter.patch('/:id', async (req: AuthenticatedRequest, res: Response) =>
 });
 
 // PUT /api/sessions/:id/stop
-// Finaliza a sessão, preenchendo o end_time e opcionalmente atualizando o título antes de salvar.
+// Finaliza a sessão, preenchendo o end_time e opcionalmente atualizando o título e observações antes de salvar.
 sessionsRouter.put('/:id/stop', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const { title } = req.body || {};
+    const { title, notes } = req.body || {};
 
     const session = await TimeSession.findOne({
       where: {
@@ -219,6 +281,10 @@ sessionsRouter.put('/:id/stop', async (req: AuthenticatedRequest, res: Response)
 
     if (title !== undefined && typeof title === 'string' && title.trim()) {
       session.title = title.trim();
+    }
+
+    if (notes !== undefined) {
+      session.notes = typeof notes === 'string' ? notes.trim() || null : null;
     }
 
     const serverEndTime = new Date();
@@ -250,6 +316,12 @@ sessionsRouter.delete('/:id', async (req: AuthenticatedRequest, res: Response) =
 
     if (!session) {
       return res.status(404).json({ error: 'Sessão não encontrada' });
+    }
+
+    if (session.is_locked) {
+      return res.status(403).json({
+        error: 'Esta sessão está aprovada e bloqueada no banco de dados. Exclusões não são permitidas.',
+      });
     }
 
     // Delete tasks associated

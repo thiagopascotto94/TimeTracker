@@ -86,13 +86,13 @@ export const OPENAI_TOOLS: ChatCompletionTool[] = [
     function: {
       name: 'search_history',
       description:
-        'Pesquisa o histórico de sessões de trabalho do usuário e workspace atual. Permite buscar por texto no título/tarefas, filtrar por cliente, período de datas e limite de registros.',
+        'Pesquisa o histórico de sessões de trabalho do usuário e workspace atual. Permite buscar por texto no título, observações da sessão (notes) ou tarefas/observações de tarefas, filtrar por cliente, período de datas e limite de registros.',
       parameters: {
         type: 'object',
         properties: {
           query: {
             type: 'string',
-            description: 'Termo de busca para título da sessão ou descrição de tarefas.',
+            description: 'Termo de busca para título da sessão, observações da sessão (notes) ou descrição/observações de tarefas.',
           },
           client_name: {
             type: 'string',
@@ -108,7 +108,7 @@ export const OPENAI_TOOLS: ChatCompletionTool[] = [
           },
           limit: {
             type: 'integer',
-            description: 'Quantidade máxima de sessões a retornar (padrão 10).',
+            description: 'Quantidade máxima de sessões a retornar (padrão 10, máximo 50).',
           },
         },
       },
@@ -119,7 +119,7 @@ export const OPENAI_TOOLS: ChatCompletionTool[] = [
     function: {
       name: 'get_active_session',
       description:
-        'Verifica se há um cronômetro / sessão de trabalho atualmente em execução para o usuário, retornando detalhes, tempo decorrido, cliente e tarefas registradas.',
+        'Verifica se há um cronômetro / sessão de trabalho atualmente em execução para o usuário, retornando detalhes, tempo decorrido, cliente, observações da sessão (notes), token de relatório público e todas as tarefas registradas com suas observações (notes).',
       parameters: {
         type: 'object',
         properties: {},
@@ -131,13 +131,17 @@ export const OPENAI_TOOLS: ChatCompletionTool[] = [
     function: {
       name: 'start_timer',
       description:
-        'Inicia uma nova sessão de cronômetro de trabalho para o usuário no servidor. Registra o timestamp oficial e vincula opcionalmente a um cliente ou sessão anterior.',
+        'Inicia uma nova sessão de cronômetro de trabalho para o usuário no servidor. Registra o timestamp oficial e vincula opcionalmente a um cliente, observações da sessão (notes) ou sessão anterior.',
       parameters: {
         type: 'object',
         properties: {
           title: {
             type: 'string',
-            description: 'Título ou objetivo da sessão de trabalho.',
+            description: 'Título ou objetivo principal da sessão de trabalho.',
+          },
+          notes: {
+            type: 'string',
+            description: 'Observações, briefing, links de referência ou anotações gerais da sessão de trabalho.',
           },
           target_minutes: {
             type: 'number',
@@ -156,6 +160,40 @@ export const OPENAI_TOOLS: ChatCompletionTool[] = [
             description: 'ID de uma sessão anterior para continuar ou retomar.',
           },
         },
+        required: ['title'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'update_active_session',
+      description:
+        'Atualiza dados da sessão de cronômetro ativa em andamento (título, observações gerais da sessão notes, meta de minutos ou cliente associado).',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: {
+            type: 'string',
+            description: 'Novo título para a sessão ativa.',
+          },
+          notes: {
+            type: 'string',
+            description: 'Novas observações ou anotações gerais da sessão de trabalho.',
+          },
+          target_minutes: {
+            type: 'number',
+            description: 'Nova meta de tempo em minutos.',
+          },
+          client_name: {
+            type: 'string',
+            description: 'Nome do cliente para vincular ou alterar.',
+          },
+          client_id: {
+            type: 'string',
+            description: 'ID exato do cliente.',
+          },
+        },
       },
     },
   },
@@ -164,10 +202,23 @@ export const OPENAI_TOOLS: ChatCompletionTool[] = [
     function: {
       name: 'stop_timer',
       description:
-        'Finaliza o cronômetro / sessão de trabalho ativa, calculando a duração final exata e o valor faturável com base na taxa horária do cliente.',
+        'Finaliza o cronômetro / sessão de trabalho ativa, calculando a duração final exata e o valor faturável com base na taxa horária do cliente. Permite registrar observações finais da sessão e/ou uma última tarefa realizada.',
       parameters: {
         type: 'object',
-        properties: {},
+        properties: {
+          notes: {
+            type: 'string',
+            description: 'Observações finais ou resumo geral para registrar na sessão de cronômetro.',
+          },
+          session_notes: {
+            type: 'string',
+            description: 'Observações da sessão a serem salvas permanentemente.',
+          },
+          final_task: {
+            type: 'string',
+            description: 'Descrição de uma tarefa final a ser registrada na sessão antes do encerramento (opcional).',
+          },
+        },
       },
     },
   },
@@ -176,13 +227,17 @@ export const OPENAI_TOOLS: ChatCompletionTool[] = [
     function: {
       name: 'add_task_to_timer',
       description:
-        'Adiciona uma nova tarefa à sessão de trabalho em andamento (ou a uma sessão específica informada por ID).',
+        'Adiciona uma nova tarefa à sessão de trabalho em andamento (ou a uma sessão específica informada por ID), com descrição e observações detalhadas opcionais (notes).',
       parameters: {
         type: 'object',
         properties: {
           description: {
             type: 'string',
             description: 'Descrição da tarefa realizada ou em andamento.',
+          },
+          notes: {
+            type: 'string',
+            description: 'Observações detalhadas, contexto, links ou especificações sobre esta tarefa específica (notes).',
           },
           session_id: {
             type: 'string',
@@ -198,14 +253,27 @@ export const OPENAI_TOOLS: ChatCompletionTool[] = [
     function: {
       name: 'add_multiple_tasks_to_timer',
       description:
-        'Adiciona uma lista de múltiplas tarefas à sessão ativa de uma só vez (ideal para extração de listas de checklists ou imagens de quadros de tarefas).',
+        'Adiciona uma lista de múltiplas tarefas à sessão ativa de uma só vez (ideal para extração de listas de checklists ou imagens de quadros de tarefas). Suporta descrição e observações individuais.',
       parameters: {
         type: 'object',
         properties: {
           tasks: {
             type: 'array',
-            items: { type: 'string' },
-            description: 'Lista de descrições das tarefas a adicionar.',
+            items: {
+              type: 'object',
+              properties: {
+                description: {
+                  type: 'string',
+                  description: 'Descrição da tarefa.',
+                },
+                notes: {
+                  type: 'string',
+                  description: 'Observações detalhadas da tarefa (opcional).',
+                },
+              },
+              required: ['description'],
+            },
+            description: 'Lista de tarefas a adicionar (objetos com descrição e observações ou strings).',
           },
           session_id: {
             type: 'string',
@@ -219,13 +287,74 @@ export const OPENAI_TOOLS: ChatCompletionTool[] = [
   {
     type: 'function',
     function: {
-      name: 'list_clients',
+      name: 'update_task',
       description:
-        'Lista todos os clientes cadastrados no workspace atual com suas respectivas taxas horárias e detalhes de contato.',
+        'Atualiza uma tarefa existente na sessão (alterando sua descrição e/ou suas observações detalhadas notes).',
       parameters: {
         type: 'object',
         properties: {
-          search: {
+          task_id: {
+            type: 'string',
+            description: 'ID da tarefa a ser editada.',
+          },
+          description: {
+            type: 'string',
+            description: 'Nova descrição da tarefa.',
+          },
+          notes: {
+            type: 'string',
+            description: 'Novas observações ou anotações detalhadas da tarefa.',
+          },
+        },
+        required: ['task_id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'delete_task',
+      description:
+        'Remove uma tarefa de uma sessão de cronômetro caso solicitado pelo usuário.',
+      parameters: {
+        type: 'object',
+        properties: {
+          task_id: {
+            type: 'string',
+            description: 'ID da tarefa a ser removida.',
+          },
+        },
+        required: ['task_id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_public_report_link',
+      description:
+        'Gera e retorna o link público compartilhável do relatório da sessão para envio ao cliente (para conferência de horas, tarefas e observações em tempo real e aprovação).',
+      parameters: {
+        type: 'object',
+        properties: {
+          session_id: {
+            type: 'string',
+            description: 'ID da sessão de trabalho. Se omitido, busca da sessão ativa atual ou da última realizada.',
+          },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_clients',
+      description:
+        'Lista todos os clientes cadastrados no workspace atual com suas respectivas taxas horárias, observações (notes) e detalhes de contatos para o portal.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: {
             type: 'string',
             description: 'Termo para filtrar por nome, empresa ou email.',
           },
@@ -238,7 +367,7 @@ export const OPENAI_TOOLS: ChatCompletionTool[] = [
     function: {
       name: 'create_client',
       description:
-        'Cadastra um novo cliente no workspace com nome, empresa, e-mail e taxa horária de faturamento personalizada.',
+        'Cadastra um novo cliente no workspace com nome, empresa, e-mail, taxa horária de faturamento e observações contratuais.',
       parameters: {
         type: 'object',
         properties: {
@@ -250,13 +379,17 @@ export const OPENAI_TOOLS: ChatCompletionTool[] = [
             type: 'string',
             description: 'Nome da empresa do cliente (opcional).',
           },
+          email: {
+            type: 'string',
+            description: 'E-mail do cliente (opcional).',
+          },
           hourly_rate: {
             type: 'number',
             description: 'Valor cobrado por hora para este cliente em R$ (ex: 180.00).',
           },
-          email: {
+          notes: {
             type: 'string',
-            description: 'E-mail do cliente (opcional).',
+            description: 'Observações, particularidades ou escopo acordado com o cliente.',
           },
         },
         required: ['name'],
@@ -274,12 +407,33 @@ export const OPENAI_TOOLS: ChatCompletionTool[] = [
         properties: {
           period: {
             type: 'string',
-            enum: ['today', 'this_week', 'this_month', 'all'],
-            description: 'Período para o resumo financeiro: "today", "this_week", "this_month" ou "all".',
+            enum: ['today', 'week', 'month', 'all'],
+            description: 'Período para o resumo financeiro: "today", "week", "month" ou "all".',
           },
           client_name: {
             type: 'string',
             description: 'Filtrar faturamento por um cliente específico.',
+          },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'suggest_session_title',
+      description:
+        'Analisa as tarefas e observações realizadas na sessão e gera uma sugestão de título inteligente e profissional, podendo aplicá-lo automaticamente.',
+      parameters: {
+        type: 'object',
+        properties: {
+          session_id: {
+            type: 'string',
+            description: 'ID da sessão. Se omitido, analisa a sessão ativa atual.',
+          },
+          auto_apply: {
+            type: 'boolean',
+            description: 'Se true, já atualiza automaticamente o título da sessão ativa.',
           },
         },
       },
