@@ -19,6 +19,7 @@ import { User, Tenant, TimeSession } from '../types';
 import { formatCurrency } from '../utils/format';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
+import { WorkspaceSelector } from './WorkspaceSelector';
 
 interface NavbarProps {
   activeTab: 'timer' | 'reports' | 'history' | 'clients' | 'settings' | 'assistant';
@@ -53,26 +54,23 @@ export function Navbar({
       {/* Top Header */}
       <header className="sticky top-0 z-40 w-full border-b border-neutral-200 dark:border-neutral-800 bg-white/95 dark:bg-neutral-900/95 backdrop-blur-xs transition-colors">
         <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-3 sm:px-6 lg:px-8">
-          {/* Brand & Workspace Indicator */}
-          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-            <div className="flex h-8 w-8 sm:h-9 sm:w-9 items-center justify-center rounded-lg bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 shadow-xs shrink-0">
-              <Clock className="h-4 w-4 sm:h-5 sm:w-5" />
-            </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5 sm:gap-2">
+          {/* Brand & Workspace Selector */}
+          <div className="flex items-center gap-3 sm:gap-4 min-w-0">
+            <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
+              <div className="flex h-8 w-8 sm:h-9 sm:w-9 items-center justify-center rounded-lg bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 shadow-xs shrink-0">
+                <Clock className="h-4 w-4 sm:h-5 sm:w-5" />
+              </div>
+              <div className="hidden lg:block">
                 <span className="text-sm sm:text-base font-bold tracking-tight text-neutral-900 dark:text-neutral-100 truncate">
                   Time Tracking
                 </span>
               </div>
-              {tenant && (
-                <div className="hidden sm:flex items-center gap-1.5 text-xs text-neutral-500 dark:text-neutral-400">
-                  <Building2 className="h-3 w-3 text-neutral-400 dark:text-neutral-500" />
-                  <span className="font-medium text-neutral-700 dark:text-neutral-300 truncate max-w-[140px]">
-                    {tenant.name}
-                  </span>
-                </div>
-              )}
             </div>
+
+            <div className="h-5 w-px bg-neutral-200 dark:bg-neutral-800 hidden sm:block" />
+
+            {/* Workspace Selector Dropdown */}
+            <WorkspaceSelector />
           </div>
 
           {/* Desktop Navigation Tabs */}

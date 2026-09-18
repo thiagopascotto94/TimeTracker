@@ -15,6 +15,7 @@ import { aiRouter } from './server/routes/ai';
 import { gitRouter } from './server/routes/git';
 import { billingRouter } from './server/routes/billing';
 import { invitesRouter } from './server/routes/invites';
+import { workspacesRouter } from './server/routes/workspaces';
 
 const PORT = 3000;
 const HOST = '0.0.0.0';
@@ -70,6 +71,7 @@ async function startServer() {
   app.use('/api/git', gitRouter);
   app.use('/api/billing', billingRouter);
   app.use('/api/invites', invitesRouter);
+  app.use('/api/workspaces', workspacesRouter);
 
   // Vite middleware setup
   if (process.env.NODE_ENV !== 'production') {

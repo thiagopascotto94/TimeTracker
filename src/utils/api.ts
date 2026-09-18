@@ -19,6 +19,11 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
     headers.set('Authorization', `Bearer ${token}`);
   }
 
+  const activeWorkspaceId = typeof window !== 'undefined' ? localStorage.getItem('cronos_active_workspace_id') : null;
+  if (activeWorkspaceId && url.startsWith('/api/') && !headers.has('x-workspace-id')) {
+    headers.set('x-workspace-id', activeWorkspaceId);
+  }
+
   const fetchFn = typeof window !== 'undefined' ? window.fetch.bind(window) : fetch;
   const res = await fetchFn(input, {
     ...init,

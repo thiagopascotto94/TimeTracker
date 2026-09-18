@@ -518,6 +518,108 @@ User.init(
   }
 );
 
+export interface WorkspaceAttributes {
+  id: string;
+  tenant_id: string;
+  name: string;
+  description?: string | null;
+  created_at?: Date;
+  updated_at?: Date;
+}
+export class Workspace extends Model<WorkspaceAttributes> implements WorkspaceAttributes {
+  public id!: string;
+  public tenant_id!: string;
+  public name!: string;
+  public description!: string | null;
+  public readonly created_at!: Date;
+  public readonly updated_at!: Date;
+  public readonly Tenant?: Tenant;
+  public readonly Members?: WorkspaceMember[];
+}
+Workspace.init(
+  {
+    id: {
+      type: DataTypes.STRING,
+      primaryKey: true,
+      defaultValue: () => crypto.randomUUID(),
+    },
+    tenant_id: {
+      type: DataTypes.STRING,
+      allowNull: false,
+    },
+    name: {
+      type: DataTypes.STRING,
+      allowNull: false,
+    },
+    description: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+  },
+  {
+    sequelize,
+    modelName: 'Workspace',
+    tableName: 'workspaces',
+    underscored: true,
+    timestamps: true,
+  }
+);
+
+export interface WorkspaceMemberAttributes {
+  id: string;
+  workspace_id: string;
+  user_id: string;
+  role: string; // 'owner' | 'admin' | 'member'
+  created_at?: Date;
+  updated_at?: Date;
+}
+export class WorkspaceMember extends Model<WorkspaceMemberAttributes> implements WorkspaceMemberAttributes {
+  public id!: string;
+  public workspace_id!: string;
+  public user_id!: string;
+  public role!: string;
+  public readonly created_at!: Date;
+  public readonly updated_at!: Date;
+  public readonly Workspace?: Workspace;
+  public readonly User?: User;
+}
+WorkspaceMember.init(
+  {
+    id: {
+      type: DataTypes.STRING,
+      primaryKey: true,
+      defaultValue: () => crypto.randomUUID(),
+    },
+    workspace_id: {
+      type: DataTypes.STRING,
+      allowNull: false,
+    },
+    user_id: {
+      type: DataTypes.STRING,
+      allowNull: false,
+    },
+    role: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      defaultValue: 'member',
+    },
+  },
+  {
+    sequelize,
+    modelName: 'WorkspaceMember',
+    tableName: 'workspace_members',
+    underscored: true,
+    timestamps: true,
+  }
+);
+
+Workspace.hasMany(WorkspaceMember, { foreignKey: 'workspace_id', as: 'Members' });
+WorkspaceMember.belongsTo(Workspace, { foreignKey: 'workspace_id', as: 'Workspace' });
+WorkspaceMember.belongsTo(User, { foreignKey: 'user_id', as: 'User' });
+User.hasMany(WorkspaceMember, { foreignKey: 'user_id', as: 'WorkspaceMemberships' });
+Tenant.hasMany(Workspace, { foreignKey: 'tenant_id', as: 'Workspaces' });
+Workspace.belongsTo(Tenant, { foreignKey: 'tenant_id', as: 'Tenant' });
+
 export interface TimeSessionAttributes {
   id: string;
   tenant_id: string;
@@ -1739,5 +1841,35 @@ export async function initDb() {
     }
   } catch (err) {
     console.error('Error synchronizing tenant plans/subscriptions:', err);
+  }
+
+  // Ensure default workspaces exist for users
+  try {
+    const allUsers = await User.findAll();
+    for (const user of allUsers) {
+      const userId = user.id;
+      const tenantId = user.tenant_id;
+      if (!tenantId || !userId) continue;
+
+      const membership = await WorkspaceMember.findOne({ where: { user_id: userId } });
+      if (!membership) {
+        let workspace = await Workspace.findOne({ where: { tenant_id: tenantId } });
+        if (!workspace) {
+          const tenant = await Tenant.findByPk(tenantId);
+          workspace = await Workspace.create({
+            tenant_id: tenantId,
+            name: tenant?.name ? `Workspace de ${tenant.name}` : 'Workspace Principal',
+            description: 'Workspace padrão',
+          });
+        }
+        await WorkspaceMember.create({
+          workspace_id: workspace.id,
+          user_id: userId,
+          role: 'owner',
+        });
+      }
+    }
+  } catch (err) {
+    console.error('Error seeding default workspaces:', err);
   }
 }
