@@ -2,9 +2,10 @@ import { Router, Response } from 'express';
 import { GoogleGenAI, Type, FunctionDeclaration } from '@google/genai';
 import { Op } from 'sequelize';
 import crypto from 'crypto';
-import { TimeSession, Task, Client, User, AiMessage, ClientContact } from '../db';
+import { TimeSession, Task, Client, User, AiMessage, ClientContact, Tenant } from '../db';
 import { authMiddleware, AuthenticatedRequest } from '../auth';
 import { getKiloConfig, getKiloClient, runKiloAgenticChat } from '../kilo';
+import { getTenantBillingStatus } from '../billing';
 
 export const aiRouter = Router();
 
@@ -201,6 +202,336 @@ Regras estritas:
   } catch (err: any) {
     console.error('Error in suggest-title:', err);
     return res.status(500).json({ error: 'Erro ao sugerir título com IA', details: err.message });
+  }
+});
+
+// Helper to format conventional commit messages (feat:, fix:, etc.)
+function formatConventionalCommitTitle(raw: string): string {
+  let title = raw.trim();
+  const match = title.match(/^([a-z]+)(?:\(([^)]+)\))?!?:\s*(.+)$/i);
+  if (match) {
+    const type = match[1].toLowerCase();
+    const scope = match[2] ? `[${match[2].trim()}] ` : '';
+    const desc = match[3].trim();
+    const prefixMap: Record<string, string> = {
+      feat: 'Implementar ',
+      fix: 'Corrigir ',
+      refactor: 'Refatorar ',
+      docs: 'Documentar ',
+      test: 'Testes: ',
+      style: 'Ajustar estilo de ',
+      perf: 'Otimizar ',
+      chore: 'Manutenção: ',
+      build: 'Build/Config: ',
+      ci: 'CI/CD: ',
+    };
+    const prefix = prefixMap[type] || '';
+    title = `${scope}${prefix}${desc}`;
+  }
+  if (title.length > 0) {
+    title = title.charAt(0).toUpperCase() + title.slice(1);
+  }
+  return title.slice(0, 80);
+}
+
+// Safely parses JSON tasks array from AI response
+function parseTasksJson(
+  text: string,
+  commits?: Array<{ sha?: string; url?: string }>
+): { tasks: Array<{ title: string; notes: string; link?: string | null }>; summary: string } | null {
+  try {
+    let clean = text.trim();
+    if (clean.startsWith('```')) {
+      clean = clean.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+    }
+    const jsonStart = clean.indexOf('{');
+    const jsonEnd = clean.lastIndexOf('}');
+    if (jsonStart !== -1 && jsonEnd !== -1) {
+      clean = clean.slice(jsonStart, jsonEnd + 1);
+    }
+    const parsed = JSON.parse(clean);
+    if (parsed && Array.isArray(parsed.tasks)) {
+      const validTasks = parsed.tasks
+        .filter((t: any) => t && (t.title || t.description))
+        .map((t: any, index: number) => {
+          let taskLink: string | null = t.link ? String(t.link).trim() : null;
+          if (!taskLink && commits && commits.length > 0) {
+            if (t.commitIndex && typeof t.commitIndex === 'number' && commits[t.commitIndex - 1]?.url) {
+              taskLink = commits[t.commitIndex - 1].url || null;
+            } else if (t.sha) {
+              const matched = commits.find((c) => c.sha && (c.sha === t.sha || c.sha.startsWith(t.sha)));
+              if (matched?.url) taskLink = matched.url;
+            } else if (commits.length === 1 && commits[0].url) {
+              taskLink = commits[0].url;
+            } else if (commits[index]?.url) {
+              taskLink = commits[index].url;
+            }
+          }
+          return {
+            title: String(t.title || t.description).trim().slice(0, 85),
+            notes: t.notes ? String(t.notes).trim() : '',
+            link: taskLink,
+          };
+        });
+      return {
+        tasks: validTasks,
+        summary: parsed.summary ? String(parsed.summary).trim() : 'Tarefas identificadas com sucesso.',
+      };
+    }
+  } catch (err) {
+    console.warn('Failed to parse tasks JSON from AI output:', err);
+  }
+  return null;
+}
+
+// Fallback heuristic parser when AI is unavailable
+function heuristicGitParse(params: {
+  rawText?: string;
+  commits?: Array<{
+    sha?: string;
+    message: string;
+    author?: string;
+    date?: string;
+    url?: string;
+    files?: Array<{ filename: string; status?: string; additions?: number; deletions?: number }>;
+  }>;
+}): { tasks: Array<{ title: string; notes: string; link?: string | null }>; summary: string } {
+  const tasks: Array<{ title: string; notes: string; link?: string | null }> = [];
+
+  if (params.commits && params.commits.length > 0) {
+    for (const c of params.commits) {
+      const lines = (c.message || '').split('\n').map((l) => l.trim()).filter(Boolean);
+      const firstLine = lines[0] || 'Alteração de commit';
+      const body = lines.slice(1).join(' ');
+      const filesSummary =
+        c.files && c.files.length > 0
+          ? `Arquivos (${c.files.length}): ` +
+            c.files
+              .map((f) => f.filename)
+              .slice(0, 5)
+              .join(', ') +
+            (c.files.length > 5 ? '...' : '')
+          : '';
+      const notesParts = [];
+      if (c.sha) notesParts.push(`Commit: ${c.sha.slice(0, 7)}`);
+      if (c.author) notesParts.push(`Autor: ${c.author}`);
+      if (body) notesParts.push(body);
+      if (filesSummary) notesParts.push(filesSummary);
+
+      tasks.push({
+        title: formatConventionalCommitTitle(firstLine),
+        notes: notesParts.join(' | '),
+        link: c.url || null,
+      });
+    }
+    return {
+      tasks,
+      summary: `${tasks.length} tarefa(s) extraída(s) dos commits selecionados.`,
+    };
+  }
+
+  const raw = params.rawText || '';
+  const lines = raw.split('\n').map((l) => l.trim()).filter(Boolean);
+
+  for (const line of lines) {
+    if (
+      line.startsWith('diff --git') ||
+      line.startsWith('index ') ||
+      line.startsWith('---') ||
+      line.startsWith('+++') ||
+      line.startsWith('@@') ||
+      line.startsWith('commit ')
+    ) {
+      continue;
+    }
+    const cleanLine = line.replace(/^[\*\-\•]\s*/, '').replace(/^[0-9a-f]{7,40}\s+/i, '').trim();
+    if (cleanLine.length > 4 && !cleanLine.startsWith('|')) {
+      tasks.push({
+        title: formatConventionalCommitTitle(cleanLine),
+        notes: 'Extraído do log do Git',
+        link: null,
+      });
+    }
+  }
+
+  const uniqueTasks = tasks
+    .filter((t, i, arr) => arr.findIndex((x) => x.title.toLowerCase() === t.title.toLowerCase()) === i)
+    .slice(0, 15);
+
+  return {
+    tasks:
+      uniqueTasks.length > 0
+        ? uniqueTasks
+        : [{ title: 'Implementar alterações do commit', notes: raw.slice(0, 200), link: null }],
+    summary: `${uniqueTasks.length} tarefa(s) identificada(s) nas alterações.`,
+  };
+}
+
+// Core function to analyze git commit diffs / logs with Gemini / Kilo
+export async function parseGitTasksWithAI(params: {
+  rawText?: string;
+  commits?: Array<{
+    sha?: string;
+    message: string;
+    author?: string;
+    date?: string;
+    url?: string;
+    files?: Array<{ filename: string; status?: string; additions?: number; deletions?: number }>;
+  }>;
+}): Promise<{ tasks: Array<{ title: string; notes: string; link?: string | null }>; summary: string }> {
+  let contextText = '';
+
+  if (params.commits && params.commits.length > 0) {
+    contextText =
+      'LISTA DE COMMITS SELECIONADOS DO REPOSITÓRIO:\n' +
+      params.commits
+        .map((c, idx) => {
+          const filesStr =
+            c.files && c.files.length > 0
+              ? `Arquivos alterados (${c.files.length}): ` +
+                c.files
+                  .map((f) => `${f.filename} (+${f.additions || 0}/-${f.deletions || 0})`)
+                  .slice(0, 10)
+                  .join(', ')
+              : '';
+          return `Commit #${idx + 1} [${c.sha ? c.sha.slice(0, 7) : 'HEAD'}]:\n` +
+            `${c.url ? `URL: ${c.url}\n` : ''}` +
+            `Mensagem: ${c.message}\n` +
+            `${c.author ? `Autor: ${c.author}\n` : ''}${filesStr}`;
+        })
+        .join('\n---\n');
+  } else if (params.rawText && params.rawText.trim()) {
+    contextText = 'CONTEÚDO / LOG / DIFF DO GIT COLADO PELO USUÁRIO:\n' + params.rawText.trim();
+  }
+
+  if (!contextText.trim()) {
+    throw new Error('Nenhum texto de commit, log ou diff foi fornecido.');
+  }
+
+  if (contextText.length > 25000) {
+    contextText = contextText.slice(0, 25000) + '\n... [conteúdo truncado para análise]';
+  }
+
+  const prompt = `Você é um analista sênior de engenharia de software e gestão ágil de projetos.
+Sua função é analisar as alterações de código, mensagens de commit do Git, diffs ou logs fornecidos e extrair uma lista organizada e profissional de TAREFAS ENTREGUES para um sistema de Time Tracking e Faturamento.
+
+${contextText}
+
+DIRETRIZES DE EXTRAÇÃO:
+1. Agrupe alterações relacionadas em entregas de valor claras e orientadas a negócio ou funcionalidade técnica (ex: "Implementar autenticação JWT e rotas de login", "Corrigir cálculo de arredondamento de faturamento nos relatórios").
+2. Evite criar tarefas separadas para pequenos ruídos (ex: bumps de versão, ajustes de lint/formatação, correções de vírgula), a menos que façam parte de uma refatoração importante.
+3. Para cada tarefa identificada, forneça:
+   - title: Descrição profissional e concisa da entrega em português (máx. 75 caracteres). Use verbos no infinitivo (Implementar, Configurar, Corrigir, Otimizar, Refatorar).
+   - notes: Contexto técnico conciso com arquivos modificados, componentes afetados, bibliotecas ou regras de negócio (estilo observações de entrega).
+   - commitIndex: Número do commit correspondente (#1, #2...) de onde veio a alteração.
+   - link: URL completa do commit se disponível na listagem acima (ou null se não houver).
+4. OBRIGATÓRIO: Responda APENAS com um objeto JSON com a seguinte estrutura:
+{
+  "tasks": [
+    {
+      "title": "...",
+      "notes": "...",
+      "commitIndex": 1,
+      "link": "https://..."
+    }
+  ],
+  "summary": "Resumo em uma frase do que foi desenvolvido."
+}`;
+
+  // 1. Kilo provider if configured
+  const kiloConfig = getKiloConfig();
+  const geminiApiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
+
+  if (kiloConfig.isConfigured) {
+    try {
+      const { client, model } = getKiloClient();
+      const completion = await client.chat.completions.create({
+        model,
+        messages: [
+          { role: 'system', content: 'Você é um assistente técnico que analisa commits do Git e retorna estritamente JSON.' },
+          { role: 'user', content: prompt },
+        ],
+        temperature: 0.2,
+      });
+
+      const text = completion.choices?.[0]?.message?.content?.trim();
+      if (text) {
+        const parsed = parseTasksJson(text, params.commits);
+        if (parsed && parsed.tasks.length > 0) {
+          return parsed;
+        }
+      }
+    } catch (kiloErr) {
+      console.warn('Kilo parseGitTasksWithAI failed, fallback to Gemini:', kiloErr);
+    }
+  }
+
+  // 2. Gemini
+  if (geminiApiKey) {
+    try {
+      const ai = getGenAI();
+      const candidateModels = ['gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-2.5-flash'];
+      for (const m of candidateModels) {
+        try {
+          const resp = await ai.models.generateContent({
+            model: m,
+            contents: prompt,
+          });
+          const text = resp.text?.trim();
+          if (text) {
+            const parsed = parseTasksJson(text, params.commits);
+            if (parsed && parsed.tasks.length > 0) {
+              return parsed;
+            }
+          }
+        } catch (modelErr) {
+          console.warn(`Model ${m} failed in parseGitTasksWithAI:`, modelErr);
+        }
+      }
+    } catch (geminiErr) {
+      console.warn('Gemini parseGitTasksWithAI failed:', geminiErr);
+    }
+  }
+
+  // 3. Smart Heuristic Fallback
+  return heuristicGitParse(params);
+}
+
+// POST /api/ai/suggest-tasks-from-git
+// Analisa commits ou diffs e retorna tarefas estruturadas com IA para aprovação na UI
+aiRouter.post('/suggest-tasks-from-git', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { rawText, commits, sessionId } = req.body || {};
+
+    if (!rawText && (!Array.isArray(commits) || commits.length === 0)) {
+      return res.status(400).json({
+        error: 'Informe o texto do commit/diff ou selecione ao menos um commit do GitHub para análise.',
+      });
+    }
+
+    const result = await parseGitTasksWithAI({
+      rawText: typeof rawText === 'string' ? rawText : undefined,
+      commits: Array.isArray(commits) ? commits : undefined,
+    });
+
+    // Generate unique temporary IDs for UI editing and selection
+    const formattedTasks = result.tasks.map((t) => ({
+      id: crypto.randomUUID(),
+      description: t.title,
+      notes: t.notes || '',
+      link: t.link || null,
+      selected: true,
+    }));
+
+    return res.json({
+      summary: result.summary,
+      tasks: formattedTasks,
+      count: formattedTasks.length,
+      sessionId: sessionId || null,
+    });
+  } catch (err: any) {
+    console.error('Error in suggest-tasks-from-git:', err);
+    return res.status(500).json({ error: err.message || 'Erro ao processar commits com IA' });
   }
 });
 
@@ -510,6 +841,10 @@ const createClientDeclaration: FunctionDeclaration = {
         type: Type.NUMBER,
         description: 'Taxa horária específica em Reais (R$/h).',
       },
+      daily_target_minutes: {
+        type: Type.NUMBER,
+        description: 'Meta diária de tempo em minutos para este cliente (calculada da mesma forma que o Objetivo de Tempo da sessão).',
+      },
       notes: {
         type: Type.STRING,
         description: 'Observações gerais, escopo acordado ou particularidades do cliente.',
@@ -553,6 +888,26 @@ const suggestSessionTitleDeclaration: FunctionDeclaration = {
   },
 };
 
+const suggestTasksFromCommitsDeclaration: FunctionDeclaration = {
+  name: 'suggest_tasks_from_commits',
+  description:
+    'Analisa alterações de código, mensagens de commit do Git, diffs ou logs fornecidos pelo usuário e sugere tarefas estruturadas com títulos profissionais e notas técnicas. Pode opcionalmente registrá-las de imediato na sessão ativa se o usuário confirmar.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      git_content: {
+        type: Type.STRING,
+        description: 'Texto do commit, histórico do git log ou diff de código a ser analisado.',
+      },
+      auto_create: {
+        type: Type.BOOLEAN,
+        description: 'Se true, adiciona as tarefas geradas diretamente na sessão ativa atual.',
+      },
+    },
+    required: ['git_content'],
+  },
+};
+
 const AI_TOOLS = [
   searchHistoryDeclaration,
   getActiveSessionDeclaration,
@@ -568,6 +923,7 @@ const AI_TOOLS = [
   createClientDeclaration,
   getFinancialSummaryDeclaration,
   suggestSessionTitleDeclaration,
+  suggestTasksFromCommitsDeclaration,
 ];
 
 // Tool Execution Handler with Strict Multi-Tenant Isolation
@@ -608,7 +964,12 @@ async function executeTool(
           target_minutes: active.target_minutes,
           elapsed_minutes: elapsedMinutes,
           estimated_billable: `R$ ${billable.toFixed(2)}`,
-          client: active.Client ? { id: active.Client.id, name: active.Client.name, company: active.Client.company } : null,
+          client: active.Client ? {
+            id: active.Client.id,
+            name: active.Client.name,
+            company: active.Client.company,
+            daily_target_minutes: active.Client.daily_target_minutes,
+          } : null,
           public_token: active.public_token || null,
           public_report_url: active.public_token ? `/shared/${active.public_token}` : null,
           tasks_count: active.Tasks?.length || 0,
@@ -668,6 +1029,15 @@ async function executeTool(
       const serverStartTime = new Date();
       const publicToken = crypto.randomBytes(16).toString('hex');
 
+      // Check workspace default target minutes if none specified
+      let resolvedTarget = args.target_minutes ? Number(args.target_minutes) : null;
+      if (!resolvedTarget) {
+        const tenantRec = await Tenant.findByPk(tenantId);
+        if (tenantRec && tenantRec.default_target_minutes) {
+          resolvedTarget = tenantRec.default_target_minutes;
+        }
+      }
+
       const created = await TimeSession.create({
         tenant_id: tenantId,
         user_id: userId,
@@ -676,7 +1046,7 @@ async function executeTool(
         notes: args.notes ? String(args.notes).trim() : null,
         start_time: serverStartTime,
         end_time: null,
-        target_minutes: args.target_minutes ? Number(args.target_minutes) : null,
+        target_minutes: resolvedTarget,
         previous_session_id: prevSession ? prevSession.id : null,
         public_token: publicToken,
       });
@@ -1227,6 +1597,7 @@ async function executeTool(
             name: c.name,
             company: c.company,
             hourly_rate: c.hourly_rate ? `R$ ${c.hourly_rate}/h` : `Padrão (R$ ${userHourlyRate}/h)`,
+            daily_target_minutes: c.daily_target_minutes ? `${c.daily_target_minutes} min/dia` : null,
             email: c.email,
             notes: c.notes || null,
             contacts: ((c as any).Contacts || []).map((cnt: any) => ({
@@ -1245,12 +1616,27 @@ async function executeTool(
         return { result: { error: 'O nome do cliente é obrigatório.' } };
       }
 
+      // Validação de limite de clientes do plano ativo
+      const billingStatus = await getTenantBillingStatus(tenantId);
+      if (!billingStatus.can_create_client) {
+        return {
+          result: {
+            error: `Limite de clientes atingido para o plano ${billingStatus.plan.name} (${billingStatus.usage.clients.current}/${billingStatus.usage.clients.max}). Faça upgrade para o plano Pro ou Team na aba Faturamento para cadastrar mais clientes.`,
+            plan_limit_exceeded: true,
+            resource: 'clients',
+            current: billingStatus.usage.clients.current,
+            max: billingStatus.usage.clients.max,
+          },
+        };
+      }
+
       const client = await Client.create({
         tenant_id: tenantId,
         name: args.name.trim(),
         company: args.company ? args.company.trim() : null,
         email: args.email ? args.email.trim() : null,
         hourly_rate: args.hourly_rate ? Number(args.hourly_rate) : null,
+        daily_target_minutes: args.daily_target_minutes ? Number(args.daily_target_minutes) : null,
         notes: args.notes ? args.notes.trim() : null,
       });
 
@@ -1263,6 +1649,7 @@ async function executeTool(
             name: client.name,
             company: client.company,
             hourly_rate: client.hourly_rate,
+            daily_target_minutes: client.daily_target_minutes,
             notes: client.notes,
           },
         },
@@ -1319,6 +1706,97 @@ async function executeTool(
           total_hours: (totalMinutes / 60).toFixed(2),
           total_billable_formatted: `R$ ${totalBillable.toFixed(2)}`,
         },
+      };
+    }
+
+    case 'suggest_session_title': {
+      let session: any = null;
+      if (args.session_id) {
+        session = await TimeSession.findOne({
+          where: { id: args.session_id, tenant_id: tenantId, user_id: userId },
+          include: [{ model: Task, as: 'Tasks' }, { model: Client, as: 'Client' }],
+        });
+      } else {
+        session = await TimeSession.findOne({
+          where: { tenant_id: tenantId, user_id: userId, end_time: null },
+          include: [{ model: Task, as: 'Tasks' }, { model: Client, as: 'Client' }],
+        });
+      }
+
+      if (!session) {
+        return { result: { error: 'Nenhuma sessão ativa encontrada para sugerir título.' } };
+      }
+
+      const tasks = (session.Tasks || []).map((t: any) => t.description);
+      const title =
+        tasks.length > 0
+          ? tasks.slice(0, 2).join(' & ')
+          : session.title || 'Sessão de Trabalho';
+
+      if (args.auto_apply && session) {
+        session.title = title;
+        await session.save();
+        return {
+          result: {
+            suggested_title: title,
+            applied: true,
+            session_id: session.id,
+          },
+          sessionUpdated: true,
+        };
+      }
+
+      return {
+        result: {
+          suggested_title: title,
+          applied: false,
+          session_id: session.id,
+        },
+      };
+    }
+
+    case 'suggest_tasks_from_commits': {
+      const gitContent = args.git_content ? String(args.git_content).trim() : '';
+      if (!gitContent) {
+        return { result: { error: 'Conteúdo de git ou commits não informado.' } };
+      }
+
+      const parsed = await parseGitTasksWithAI({ rawText: gitContent });
+      const createdTasks: any[] = [];
+      let sessionUpdated = false;
+
+      if (args.auto_create) {
+        const active = await TimeSession.findOne({
+          where: { tenant_id: tenantId, user_id: userId, end_time: null },
+        });
+        if (active) {
+          for (const item of parsed.tasks) {
+            const created = await Task.create({
+              tenant_id: tenantId,
+              time_session_id: active.id,
+              description: item.title,
+              notes: item.notes || null,
+            });
+            createdTasks.push(created);
+          }
+          sessionUpdated = true;
+        }
+      }
+
+      return {
+        result: {
+          summary: parsed.summary,
+          tasks_count: parsed.tasks.length,
+          suggested_tasks: parsed.tasks,
+          auto_created: createdTasks.length > 0,
+          created_tasks_count: createdTasks.length,
+          requires_approval: !args.auto_create,
+          message:
+            createdTasks.length > 0
+              ? `${createdTasks.length} tarefa(s) gerada(s) e registradas na sessão ativa com sucesso.`
+              : `${parsed.tasks.length} tarefa(s) sugerida(s) com base no commit. Revise e aprove para criá-las.`,
+        },
+        sessionUpdated,
       };
     }
 
@@ -1408,10 +1886,11 @@ aiRouter.post('/chat', async (req: AuthenticatedRequest, res: Response) => {
     // System instruction specifying role, behavior, and capabilities
     const systemInstruction = `Você é o Cronos AI, o assistente inteligente oficial deste sistema de Time Tracking, Produtividade e Faturamento Multitenant.
 Seu papel é ajudar o profissional freelancer, consultor ou equipe a gerenciar seu tempo, sessões e clientes com máxima produtividade:
-1. Controle de Cronômetro:
-   - Inicie sessões com start_timer (com título, observações gerais notes, meta de minutos target_minutes e cliente).
+1. Controle de Cronômetro e Metas:
+   - Inicie sessões com start_timer (com título, observações gerais notes, meta de minutos target_minutes e cliente). O sistema aplica automaticamente o Objetivo de Tempo padrão do workspace se nenhum for especificado.
    - Atualize a sessão em andamento com update_active_session (alterar título, observações gerais da sessão notes, meta ou cliente).
    - Finalize sessões com stop_timer (podendo salvar observações finais notes e/ou registrar uma tarefa final concluída).
+   - Calcule e acompanhe a Meta Diária de Tempo por Cliente (daily_target_minutes), permitindo monitorar o progresso diário acumulado de trabalho com cada cliente da mesma forma que o Objetivo de Tempo.
 2. Tarefas e Observações Detalhadas (Two-Tier Notes):
    - Cada sessão de cronômetro possui suas observações gerais da sessão (notes) para briefing, escopo ou anotações gerais.
    - Cada tarefa individual possui sua própria descrição e observações específicas (notes) para links, detalhes técnicos, entregáveis ou impedimentos.
@@ -1425,9 +1904,12 @@ Seu papel é ajudar o profissional freelancer, consultor ou equipe a gerenciar s
    - Use suggest_session_title para sugerir ou aplicar automaticamente um título profissional baseado nas tarefas e observações realizadas.
 6. Histórico, Clientes e Métricas:
    - Pesquise sessões e tarefas com search_history (que busca em títulos, observações da sessão e tarefas/observações).
-   - Consulte ou cadastre clientes com list_clients e create_client (incluindo observações contratuais e contatos).
+   - Consulte ou cadastre clientes com list_clients e create_client (incluindo meta diária de minutos daily_target_minutes, taxa horária, observações contratuais e contatos).
    - Obtenha balanço financeiro e de horas com get_financial_summary.
-7. Execução Autônoma em Cadeia:
+7. Extração de Tarefas a partir de Commits do Git:
+   - Analise logs de commit, mensagens git ou diffs com suggest_tasks_from_commits para sugerir tarefas estruturadas com título profissional e notas técnicas.
+   - Pode adicionar diretamente à sessão ativa se o usuário solicitar ou apenas apresentar para aprovação prévia.
+8. Execução Autônoma em Cadeia:
    - Execute até 60 etapas autônomas consecutivas para atender solicitações compostas.
 Responda sempre em Português do Brasil com tom profissional, prestativo e objetivo, usando formatação Markdown elegante quando apropriado.`;
 

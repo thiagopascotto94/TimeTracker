@@ -16,6 +16,8 @@ import {
   Building2,
   Briefcase,
   Lock,
+  BarChart3,
+  ShieldCheck,
 } from 'lucide-react';
 import dayjs from 'dayjs';
 import { ReportData, TimeSession, Client } from '../types';
@@ -32,16 +34,34 @@ import { Badge } from './ui/badge';
 import { Dialog } from './ui/dialog';
 import { useToast } from './ui/toast';
 import { ClientFilterAutocomplete } from './ClientFilterAutocomplete';
+import { SharedReportsManager } from './SharedReportsManager';
+import { MonthlyBillingGoalCard } from './MonthlyBillingGoalCard';
 import { apiFetch } from '../utils/api';
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  CartesianGrid,
+} from 'recharts';
 
 interface ReportsViewProps {
   hourlyRate: number;
   clients: Client[];
   onOpenPublicShare: (token: string) => void;
+  initialSubTab?: 'overview' | 'shared-links';
 }
 
-export function ReportsView({ hourlyRate, clients, onOpenPublicShare }: ReportsViewProps) {
+export function ReportsView({
+  hourlyRate,
+  clients,
+  onOpenPublicShare,
+  initialSubTab = 'overview',
+}: ReportsViewProps) {
   const { addToast } = useToast();
+  const [subTab, setSubTab] = useState<'overview' | 'shared-links'>(initialSubTab);
   const [reportData, setReportData] = useState<ReportData | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
 
@@ -104,6 +124,30 @@ export function ReportsView({ hourlyRate, clients, onOpenPublicShare }: ReportsV
   useEffect(() => {
     fetchReport();
   }, [startDate, endDate, clientId]);
+
+  // Monthly Trend (Last 6 Months) for Bar Chart
+  const [monthlyTrend, setMonthlyTrend] = useState<Array<{ key: string; month: string; billing: number; hours: number; sessionsCount: number }>>([]);
+  const [trendLoading, setTrendLoading] = useState<boolean>(true);
+
+  const fetchMonthlyTrend = async () => {
+    try {
+      setTrendLoading(true);
+      const params = new URLSearchParams();
+      if (clientId) params.append('clientId', clientId);
+      const res = await apiFetch(`/api/reports/monthly-trend?${params.toString()}`);
+      if (!res.ok) throw new Error('Falha ao obter tendência mensal');
+      const data = await res.json();
+      setMonthlyTrend(data.trend || []);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setTrendLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchMonthlyTrend();
+  }, [clientId]);
 
   // Apply quick date preset
   const handlePreset = (p: 'all' | 'today' | '7days' | 'month') => {
@@ -199,14 +243,14 @@ export function ReportsView({ hourlyRate, clients, onOpenPublicShare }: ReportsV
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6 px-3 sm:px-6 py-4 pb-24 max-w-7xl mx-auto animate-in fade-in duration-200">
       {/* Top Header & Actions */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight text-neutral-900 dark:text-neutral-100">
+          <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-neutral-900 dark:text-neutral-100">
             Relatórios &amp; Faturamento
           </h2>
-          <p className="text-sm text-neutral-500 dark:text-neutral-400">
+          <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5 sm:mt-1">
             Extrato detalhado de horas trabalhadas com cálculo de precificação por hora.
           </p>
         </div>
@@ -218,22 +262,54 @@ export function ReportsView({ hourlyRate, clients, onOpenPublicShare }: ReportsV
             setSelectedSessionIdForShare('');
             setShareDialogOpen(true);
           }}
-          className="gap-2 bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 hover:bg-neutral-800 dark:hover:bg-neutral-200 shadow-sm shrink-0 cursor-pointer"
+          className="w-full sm:w-auto gap-2 bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 hover:bg-neutral-800 dark:hover:bg-neutral-200 shadow-sm shrink-0 cursor-pointer h-10 sm:h-9 text-xs sm:text-sm font-medium"
         >
-          <Share2 className="w-4 h-4" />
+          <Share2 className="w-4 h-4 shrink-0" />
           <span>Compartilhar Relatório</span>
         </Button>
       </div>
 
-      {/* Date Filters Card */}
-      <Card className="border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shadow-2xs">
+      {/* Sub-navigation Menu */}
+      <div className="flex items-center gap-1.5 p-1 bg-neutral-100 dark:bg-neutral-800/80 rounded-xl w-full sm:w-fit border border-neutral-200/80 dark:border-neutral-700/60 shadow-2xs">
+        <button
+          type="button"
+          onClick={() => setSubTab('overview')}
+          className={`flex-1 sm:flex-initial flex items-center justify-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+            subTab === 'overview'
+              ? 'bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 shadow-2xs'
+              : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-200'
+          }`}
+        >
+          <BarChart3 className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+          <span>Horas &amp; Faturamento</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setSubTab('shared-links')}
+          className={`flex-1 sm:flex-initial flex items-center justify-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+            subTab === 'shared-links'
+              ? 'bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 shadow-2xs'
+              : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-200'
+          }`}
+        >
+          <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+          <span>Relatórios Aprovados &amp; Auditoria</span>
+        </button>
+      </div>
+
+      {/* PAGE 1: Horas & Faturamento */}
+      {subTab === 'overview' && (
+        <div className="space-y-4 sm:space-y-6">
+          {/* Date Filters Card */}
+          <Card className="border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shadow-2xs">
         <CardContent className="p-4 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
             {/* Quick Presets */}
             <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-xs font-medium text-neutral-500 dark:text-neutral-400 mr-1 flex items-center gap-1">
-                <Filter className="w-3.5 h-3.5" />
-                Filtrar:
+              <span className="text-xs font-medium text-neutral-500 dark:text-neutral-400 mr-1 flex items-center gap-1 w-full sm:w-auto mb-1 sm:mb-0">
+                <Filter className="w-3.5 h-3.5 shrink-0" />
+                <span>Filtrar período:</span>
               </span>
               {[
                 { label: 'Todo o Período', val: 'all' },
@@ -241,61 +317,63 @@ export function ReportsView({ hourlyRate, clients, onOpenPublicShare }: ReportsV
                 { label: 'Últimos 7 dias', val: '7days' },
                 { label: 'Este Mês', val: 'month' },
               ].map((p) => (
-                <button
+                <Button
                   key={p.val}
                   type="button"
+                  size="sm"
+                  variant={preset === p.val ? 'default' : 'outline'}
                   onClick={() => handlePreset(p.val as any)}
-                  className={`px-3 py-1 text-xs font-semibold rounded-md border transition-colors cursor-pointer ${
-                    preset === p.val
-                      ? 'border-neutral-900 dark:border-neutral-100 bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 shadow-2xs'
-                      : 'border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-850 text-neutral-800 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800'
-                  }`}
+                  className="h-9 sm:h-8 px-3 text-xs cursor-pointer"
                 >
                   {p.label}
-                </button>
+                </Button>
               ))}
             </div>
 
-            {/* Client Filter */}
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs font-medium text-neutral-500 dark:text-neutral-400 flex items-center gap-1">
-                <Briefcase className="w-3.5 h-3.5" />
-                Cliente:
-              </span>
-              <ClientFilterAutocomplete
-                clients={clients}
-                selectedClientId={clientId}
-                onSelectClient={setClientId}
-                allLabel="Todos os Clientes"
-                allValue=""
-              />
-            </div>
-
-            {/* Custom Dates */}
-            <div className="flex items-center gap-2 text-xs">
-              <div className="flex items-center gap-1">
-                <span className="text-neutral-500 dark:text-neutral-400">De:</span>
-                <input
-                  type="date"
-                  value={startDate}
-                  onChange={(e) => {
-                    setPreset('all');
-                    setStartDate(e.target.value);
-                  }}
-                  className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2.5 py-1 text-xs font-medium text-neutral-900 dark:text-neutral-100 bg-white dark:bg-neutral-900 focus:outline-none focus:ring-2 focus:ring-neutral-900 dark:focus:ring-neutral-200"
-                />
+            {/* Client Filter & Custom Dates */}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-medium text-neutral-500 dark:text-neutral-400 flex items-center gap-1 shrink-0">
+                  <Briefcase className="w-3.5 h-3.5" />
+                  <span>Cliente:</span>
+                </span>
+                <div className="flex-1 sm:flex-initial">
+                  <ClientFilterAutocomplete
+                    clients={clients}
+                    selectedClientId={clientId}
+                    onSelectClient={setClientId}
+                    allLabel="Todos os Clientes"
+                    allValue=""
+                  />
+                </div>
               </div>
-              <div className="flex items-center gap-1">
-                <span className="text-neutral-500 dark:text-neutral-400">Até:</span>
-                <input
-                  type="date"
-                  value={endDate}
-                  onChange={(e) => {
-                    setPreset('all');
-                    setEndDate(e.target.value);
-                  }}
-                  className="rounded-md border border-neutral-300 dark:border-neutral-600 px-2.5 py-1 text-xs font-medium text-neutral-900 dark:text-neutral-100 bg-white dark:bg-neutral-900 focus:outline-none focus:ring-2 focus:ring-neutral-900 dark:focus:ring-neutral-200"
-                />
+
+              {/* Custom Dates */}
+              <div className="flex items-center gap-2 text-xs pt-1 sm:pt-0">
+                <div className="flex items-center gap-1 flex-1 sm:flex-initial">
+                  <span className="text-neutral-500 dark:text-neutral-400">De:</span>
+                  <input
+                    type="date"
+                    value={startDate}
+                    onChange={(e) => {
+                      setPreset('all');
+                      setStartDate(e.target.value);
+                    }}
+                    className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2.5 py-1.5 sm:py-1 text-xs font-medium text-neutral-900 dark:text-neutral-100 bg-white dark:bg-neutral-900 focus:outline-none focus:ring-2 focus:ring-neutral-900 dark:focus:ring-neutral-200"
+                  />
+                </div>
+                <div className="flex items-center gap-1 flex-1 sm:flex-initial">
+                  <span className="text-neutral-500 dark:text-neutral-400">Até:</span>
+                  <input
+                    type="date"
+                    value={endDate}
+                    onChange={(e) => {
+                      setPreset('all');
+                      setEndDate(e.target.value);
+                    }}
+                    className="w-full rounded-md border border-neutral-300 dark:border-neutral-600 px-2.5 py-1.5 sm:py-1 text-xs font-medium text-neutral-900 dark:text-neutral-100 bg-white dark:bg-neutral-900 focus:outline-none focus:ring-2 focus:ring-neutral-900 dark:focus:ring-neutral-200"
+                  />
+                </div>
               </div>
             </div>
           </div>
@@ -387,6 +465,77 @@ export function ReportsView({ hourlyRate, clients, onOpenPublicShare }: ReportsV
         </div>
       )}
 
+      {/* MONTHLY BILLING GOAL & PROGRESS BAR COMPONENT */}
+      <MonthlyBillingGoalCard clientId={clientId} />
+
+      {/* 6-MONTH COMPARATIVE BILLING BAR CHART (Recharts) */}
+      <Card className="border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shadow-2xs">
+        <CardHeader className="pb-3 border-b border-neutral-100 dark:border-neutral-800">
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="text-base font-bold text-neutral-900 dark:text-neutral-100 flex items-center gap-2">
+                <BarChart3 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                <span>Faturamento Comparativo (Últimos 6 Meses)</span>
+              </CardTitle>
+              <CardDescription className="text-xs text-neutral-500 dark:text-neutral-400">
+                Evolução do faturamento e volume financeiro consolidado mês a mês.
+              </CardDescription>
+            </div>
+            <Badge variant="outline" className="text-xs font-mono">
+              6 Meses
+            </Badge>
+          </div>
+        </CardHeader>
+        <CardContent className="p-4 sm:p-6">
+          {trendLoading ? (
+            <div className="h-64 flex items-center justify-center text-xs text-neutral-500">
+              Carregando gráfico comparativo...
+            </div>
+          ) : monthlyTrend.length === 0 ? (
+            <div className="h-64 flex items-center justify-center text-xs text-neutral-500">
+              Nenhum dado de faturamento encontrado para o período.
+            </div>
+          ) : (
+            <div className="h-72 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={monthlyTrend} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
+                  <XAxis
+                    dataKey="month"
+                    tick={{ fontSize: 12, fill: '#737373' }}
+                    axisLine={{ stroke: '#d4d4d4' }}
+                    tickLine={false}
+                  />
+                  <YAxis
+                    tick={{ fontSize: 11, fill: '#737373' }}
+                    axisLine={false}
+                    tickLine={false}
+                    tickFormatter={(val) => `R$ ${val >= 1000 ? (val / 1000).toFixed(1) + 'k' : val}`}
+                  />
+                  <Tooltip
+                    formatter={(value: any) => [formatCurrency(Number(value)), 'Faturamento']}
+                    labelStyle={{ fontWeight: 'bold', color: '#171717' }}
+                    contentStyle={{
+                      backgroundColor: '#ffffff',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: '8px',
+                      fontSize: '12px',
+                      boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
+                    }}
+                  />
+                  <Bar
+                    dataKey="billing"
+                    fill="#10b981"
+                    radius={[6, 6, 0, 0]}
+                    maxBarSize={48}
+                  />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       {/* SESSIONS & TASKS DETAILED LIST */}
       <Card className="border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shadow-2xs">
         <CardHeader className="pb-3 border-b border-neutral-100 dark:border-neutral-800">
@@ -409,11 +558,11 @@ export function ReportsView({ hourlyRate, clients, onOpenPublicShare }: ReportsV
 
         <CardContent className="p-0">
           {loading ? (
-            <div className="py-12 text-center text-sm text-neutral-400 dark:text-neutral-500">
+            <div className="py-12 text-center text-xs text-neutral-400 dark:text-neutral-500">
               Carregando dados do relatório...
             </div>
           ) : !reportData || reportData.sessions.length === 0 ? (
-            <div className="py-12 text-center text-sm text-neutral-400 dark:text-neutral-500">
+            <div className="py-12 text-center text-xs text-neutral-400 dark:text-neutral-500">
               Nenhuma sessão registrada no período selecionado.
             </div>
           ) : (
@@ -565,17 +714,31 @@ export function ReportsView({ hourlyRate, clients, onOpenPublicShare }: ReportsV
                                     <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
                                     <span className="leading-relaxed break-words">{t.description}</span>
                                   </div>
-                                  {t.notes && (
-                                    <button
-                                      type="button"
-                                      onClick={() => toggleTaskNote(t.id)}
-                                      className="shrink-0 inline-flex items-center gap-1 text-2xs font-semibold px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 hover:bg-amber-100 dark:hover:bg-amber-900/60 transition-colors cursor-pointer"
-                                      title="Clique para exibir ou ocultar a observação desta tarefa"
-                                    >
-                                      <FileText className="w-2.5 h-2.5 text-amber-600 dark:text-amber-400" />
-                                      <span>Observação</span>
-                                    </button>
-                                  )}
+                                  <div className="flex items-center gap-1.5 shrink-0">
+                                    {t.link && (
+                                      <a
+                                        href={t.link}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="inline-flex items-center gap-1 text-2xs font-semibold px-2 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 transition-colors"
+                                        title={`Abrir commit no repositório: ${t.link}`}
+                                      >
+                                        <ExternalLink className="w-2.5 h-2.5 text-indigo-600 dark:text-indigo-400" />
+                                        <span>Commit</span>
+                                      </a>
+                                    )}
+                                    {t.notes && (
+                                      <button
+                                        type="button"
+                                        onClick={() => toggleTaskNote(t.id)}
+                                        className="shrink-0 inline-flex items-center gap-1 text-2xs font-semibold px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 hover:bg-amber-100 dark:hover:bg-amber-900/60 transition-colors cursor-pointer"
+                                        title="Clique para exibir ou ocultar a observação desta tarefa"
+                                      >
+                                        <FileText className="w-2.5 h-2.5 text-amber-600 dark:text-amber-400" />
+                                        <span>Observação</span>
+                                      </button>
+                                    )}
+                                  </div>
                                 </div>
                                 {t.notes && expandedTaskNotes[t.id] && (
                                   <div className="mt-1.5 ml-5 p-2 rounded-md bg-amber-50/80 dark:bg-amber-950/40 border border-amber-200/70 dark:border-amber-800/50 text-xs text-amber-950 dark:text-amber-200 whitespace-pre-wrap leading-relaxed">
@@ -615,6 +778,21 @@ export function ReportsView({ hourlyRate, clients, onOpenPublicShare }: ReportsV
           )}
         </CardContent>
       </Card>
+        </div>
+      )}
+
+      {/* PAGE 2: Relatórios Aprovados & Gerenciamento de Links com Auditoria */}
+      {subTab === 'shared-links' && (
+        <SharedReportsManager
+          clients={clients}
+          onOpenPublicShare={onOpenPublicShare}
+          onOpenNewShare={() => {
+            setGeneratedShareToken(null);
+            setSelectedSessionIdForShare('');
+            setShareDialogOpen(true);
+          }}
+        />
+      )}
 
       {/* SHARE REPORT MODAL (RF08) */}
       <Dialog
@@ -652,16 +830,69 @@ export function ReportsView({ hourlyRate, clients, onOpenPublicShare }: ReportsV
                   </p>
                   {clientId ? (
                     <p>
-                      <strong>Cliente Filtrado:</strong> {clients.find((c) => c.id === clientId)?.name || 'Selecionado'} (Taxa: {formatCurrency(reportData?.summary?.hourlyRate ?? hourlyRate)}/h)
+                      <strong>Cliente Filtrado:</strong> {clients.find((c) => c.id === clientId)?.name || 'Selecionado'} {includeCost && `(Taxa: ${formatCurrency(reportData?.summary?.hourlyRate ?? hourlyRate)}/h)`}
                     </p>
                   ) : (
                     <p>
-                      <strong>Cálculo:</strong> Baseado nas taxas individuais por sessão/cliente ({reportData?.summary?.hasMultipleRates ? 'múltiplas taxas aplicadas' : `taxa base ${formatCurrency(hourlyRate)}/h`})
+                      <strong>Cálculo:</strong> {includeCost ? `Baseado nas taxas individuais por sessão/cliente (${reportData?.summary?.hasMultipleRates ? 'múltiplas taxas aplicadas' : `taxa base ${formatCurrency(hourlyRate)}/h`})` : 'Apenas total de horas e tarefas'}
                     </p>
                   )}
                   <p className="text-emerald-700 dark:text-emerald-400 font-medium">
-                    <strong>Total a Faturar:</strong> {formatCurrency(reportData?.summary?.totalBillableAmount ?? 0)}
+                    <strong>Total a Faturar:</strong>{' '}
+                    {includeCost
+                      ? formatCurrency(reportData?.summary?.totalBillableAmount ?? 0)
+                      : 'Oculto (preços desativados no link)'}
                   </p>
+                </div>
+              </div>
+
+              {/* Opções de Compartilhamento Seguro */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                  Opções de Segurança &amp; Exibição
+                </label>
+                <div className="rounded-lg border border-neutral-200 dark:border-neutral-750 bg-neutral-50/70 dark:bg-neutral-850/50 p-3 space-y-3">
+                  {/* Opção: Exibir preços */}
+                  <label className="flex items-start gap-3 cursor-pointer group select-none">
+                    <input
+                      type="checkbox"
+                      id="opt-include-cost"
+                      checked={includeCost}
+                      onChange={(e) => setIncludeCost(e.target.checked)}
+                      className="mt-0.5 h-4 w-4 rounded border-neutral-300 dark:border-neutral-600 text-neutral-900 dark:text-neutral-100 focus:ring-neutral-900 cursor-pointer"
+                    />
+                    <div className="space-y-0.5">
+                      <div className="flex items-center gap-1.5 text-xs font-semibold text-neutral-900 dark:text-neutral-100 group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">
+                        <DollarSign className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                        <span>Exibir preços</span>
+                      </div>
+                      <p className="text-2xs text-neutral-500 dark:text-neutral-400 leading-relaxed">
+                        Exibe taxas por hora, subtotal de cada sessão e valor total a faturar. Se desmarcado, remove todos os dados monetários do link gerado por segurança.
+                      </p>
+                    </div>
+                  </label>
+
+                  <div className="border-t border-neutral-200 dark:border-neutral-750" />
+
+                  {/* Opção: Aprovação */}
+                  <label className="flex items-start gap-3 cursor-pointer group select-none">
+                    <input
+                      type="checkbox"
+                      id="opt-allow-approval"
+                      checked={allowApproval}
+                      onChange={(e) => setAllowApproval(e.target.checked)}
+                      className="mt-0.5 h-4 w-4 rounded border-neutral-300 dark:border-neutral-600 text-neutral-900 dark:text-neutral-100 focus:ring-neutral-900 cursor-pointer"
+                    />
+                    <div className="space-y-0.5">
+                      <div className="flex items-center gap-1.5 text-xs font-semibold text-neutral-900 dark:text-neutral-100 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                        <span>Aprovação</span>
+                      </div>
+                      <p className="text-2xs text-neutral-500 dark:text-neutral-400 leading-relaxed">
+                        Permite que o cliente aprove formalmente o relatório na página pública com assinatura digital e código de aprovação, bloqueando alterações futuras nas sessões vinculadas.
+                      </p>
+                    </div>
+                  </label>
                 </div>
               </div>
 
@@ -685,14 +916,24 @@ export function ReportsView({ hourlyRate, clients, onOpenPublicShare }: ReportsV
             </div>
           ) : (
             <div className="space-y-4">
-              <div className="rounded-lg border border-emerald-200 dark:border-emerald-800/60 bg-emerald-50 dark:bg-emerald-950/60 p-3 text-xs text-emerald-900 dark:text-emerald-200">
+              <div className="rounded-lg border border-emerald-200 dark:border-emerald-800/60 bg-emerald-50 dark:bg-emerald-950/60 p-3 text-xs text-emerald-900 dark:text-emerald-200 space-y-2">
                 <div className="font-semibold flex items-center gap-1.5 text-emerald-800 dark:text-emerald-300">
                   <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                   Link criado com sucesso!
                 </div>
-                <p className="mt-1">
-                  Qualquer pessoa com este link poderá visualizar as horas e faturamento sem precisar de login.
+                <p>
+                  {includeCost
+                    ? 'Qualquer pessoa com este link poderá visualizar as horas e faturamento sem precisar de login.'
+                    : 'Modo seguro ativo: Todos os valores monetários e taxas foram mascarados e omitidos deste link.'}
                 </p>
+                <div className="flex flex-wrap gap-2 pt-1 text-2xs font-medium">
+                  <span className={`px-2 py-0.5 rounded-full border ${includeCost ? 'bg-emerald-100 dark:bg-emerald-900/60 border-emerald-300 text-emerald-800 dark:text-emerald-200' : 'bg-neutral-100 dark:bg-neutral-800 border-neutral-300 text-neutral-700 dark:text-neutral-300'}`}>
+                    Preços: {includeCost ? 'Visíveis' : 'Ocultos'}
+                  </span>
+                  <span className={`px-2 py-0.5 rounded-full border ${allowApproval ? 'bg-indigo-100 dark:bg-indigo-900/60 border-indigo-300 text-indigo-800 dark:text-indigo-200' : 'bg-neutral-100 dark:bg-neutral-800 border-neutral-300 text-neutral-700 dark:text-neutral-300'}`}>
+                    Aprovação: {allowApproval ? 'Habilitada' : 'Desabilitada (Somente Leitura)'}
+                  </span>
+                </div>
               </div>
 
               <div className="space-y-1.5">
@@ -758,6 +999,12 @@ export function ReportsView({ hourlyRate, clients, onOpenPublicShare }: ReportsV
                 </div>
               )}
 
+              {!allowApproval && (
+                <div className="p-2.5 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-850/60 text-2xs text-neutral-600 dark:text-neutral-400">
+                  <strong>Aprovação desativada:</strong> Este relatório é estritamente informativo (somente leitura). O visitante não verá botões de aprovação e nenhum código é necessário.
+                </div>
+              )}
+
 
 
               <div className="pt-3 flex justify-between items-center">
@@ -772,21 +1019,32 @@ export function ReportsView({ hourlyRate, clients, onOpenPublicShare }: ReportsV
                   Gerar outro link
                 </Button>
 
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setShareDialogOpen(false);
+                      setSubTab('shared-links');
+                    }}
+                    className="text-xs gap-1.5 cursor-pointer text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/50"
+                  >
+                    <ShieldCheck className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                    <span>Ver em Links &amp; Auditoria</span>
+                  </Button>
                   <Button
                     variant="outline"
                     onClick={() => {
                       setShareDialogOpen(false);
                       onOpenPublicShare(generatedShareToken);
                     }}
-                    className="text-xs gap-1.5"
+                    className="text-xs gap-1.5 cursor-pointer"
                   >
                     <ExternalLink className="w-3.5 h-3.5" />
                     <span>Visualizar como Cliente</span>
                   </Button>
                   <Button
                     onClick={() => setShareDialogOpen(false)}
-                    className="text-xs bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900"
+                    className="text-xs bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 cursor-pointer"
                   >
                     Concluir
                   </Button>

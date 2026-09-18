@@ -31,7 +31,7 @@ export function CardTitle({ className, ...props }: CardTitleProps) {
   return (
     <h3
       className={cn(
-        'font-semibold leading-none tracking-tight text-neutral-900 dark:text-neutral-100',
+        'text-base font-semibold leading-none tracking-tight text-neutral-900 dark:text-neutral-100',
         className
       )}
       {...props}
@@ -47,7 +47,7 @@ export interface CardDescriptionProps extends React.HTMLAttributes<HTMLParagraph
 export function CardDescription({ className, ...props }: CardDescriptionProps) {
   return (
     <p
-      className={cn('text-sm text-neutral-500 dark:text-neutral-300', className)}
+      className={cn('text-xs text-neutral-500 dark:text-neutral-400 leading-relaxed', className)}
       {...props}
     />
   );

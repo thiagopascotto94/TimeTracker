@@ -127,7 +127,7 @@ publicRouter.get('/shared/:token', async (req: Request, res: Response) => {
         start_time: sess.start_time,
         end_time: sess.end_time,
         target_minutes: sess.target_minutes,
-        hourly_rate: sess.hourly_rate,
+        hourly_rate: includeCost ? sess.hourly_rate : null,
         is_locked: sess.is_locked || false,
         locked_at: sess.locked_at,
         locked_reason: sess.locked_reason,
@@ -135,16 +135,27 @@ publicRouter.get('/shared/:token', async (req: Request, res: Response) => {
           ? {
               id: sess.Client.id,
               name: sess.Client.name,
-              hourly_rate: sess.Client.hourly_rate,
+              hourly_rate: includeCost ? sess.Client.hourly_rate : null,
             }
           : null,
         tasks: (sess.Tasks || []).map((t) => ({
           id: t.id,
           description: t.description,
           notes: t.notes,
+          link: t.link,
           created_at: t.created_at,
         })),
-        metrics,
+        metrics: includeCost
+          ? metrics
+          : {
+              durationMs: metrics.durationMs,
+              durationMinutes: metrics.durationMinutes,
+              decimalHours: metrics.decimalHours,
+              hourlyRate: null,
+              appliedHourlyRate: null,
+              billableAmount: null,
+              isActive: metrics.isActive,
+            },
       };
     });
 
@@ -168,9 +179,9 @@ publicRouter.get('/shared/:token', async (req: Request, res: Response) => {
         totalDurationMs,
         totalMinutes,
         totalDecimalHours,
-        hourlyRate: effectiveRate,
-        hasMultipleRates,
-        totalBillableAmount,
+        hourlyRate: includeCost ? effectiveRate : null,
+        hasMultipleRates: includeCost ? hasMultipleRates : false,
+        totalBillableAmount: includeCost ? totalBillableAmount : null,
         totalSessionsCount: mappedSessions.length,
         totalTasksCount,
         currency: 'BRL',

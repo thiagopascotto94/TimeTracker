@@ -1,6 +1,8 @@
 import { Router, Response } from 'express';
 import { TimeSession, Task, Client } from '../db';
 import { authMiddleware, AuthenticatedRequest } from '../auth';
+import { checkPlanLimit } from '../billing';
+import { Op } from 'sequelize';
 import crypto from 'crypto';
 
 export const sessionsRouter = Router();
@@ -45,11 +47,42 @@ sessionsRouter.get('/active', async (req: AuthenticatedRequest, res: Response) =
 // GET /api/sessions (list recent sessions for continuation & logs)
 sessionsRouter.get('/', async (req: AuthenticatedRequest, res: Response) => {
   try {
+    const { search, startDate, endDate, clientId } = req.query;
+    const where: any = {
+      tenant_id: req.tenantId!,
+      user_id: req.userId!,
+    };
+
+    if (clientId && clientId !== 'all') {
+      where.client_id = clientId;
+    }
+
+    if (startDate) {
+      where.start_time = {
+        ...(where.start_time || {}),
+        [Op.gte]: new Date(startDate as string),
+      };
+    }
+
+    if (endDate) {
+      const endD = new Date(endDate as string);
+      endD.setHours(23, 59, 59, 999);
+      where.start_time = {
+        ...(where.start_time || {}),
+        [Op.lte]: endD,
+      };
+    }
+
+    if (search && typeof search === 'string' && search.trim()) {
+      const q = `%${search.trim().toLowerCase()}%`;
+      where[Op.or] = [
+        { title: { [Op.like]: q } },
+        { notes: { [Op.like]: q } },
+      ];
+    }
+
     const sessions = await TimeSession.findAll({
-      where: {
-        tenant_id: req.tenantId!,
-        user_id: req.userId!,
-      },
+      where,
       include: [
         {
           model: Task,
@@ -65,7 +98,7 @@ sessionsRouter.get('/', async (req: AuthenticatedRequest, res: Response) => {
         },
       ],
       order: [['start_time', 'DESC']],
-      limit: 50,
+      limit: 100,
     });
 
     return res.json({ sessions });
@@ -78,7 +111,7 @@ sessionsRouter.get('/', async (req: AuthenticatedRequest, res: Response) => {
 // POST /api/sessions/start
 // Inicia o timer. Recebe target_minutes, previous_session_id, client_id e notes (opcionais).
 // Retorna o start_time oficial gerado pelo servidor.
-sessionsRouter.post('/start', async (req: AuthenticatedRequest, res: Response) => {
+sessionsRouter.post('/start', checkPlanLimit('sessions'), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { target_minutes, previous_session_id, title, client_id, notes } = req.body;
 
@@ -213,6 +246,9 @@ sessionsRouter.patch('/:id', async (req: AuthenticatedRequest, res: Response) =>
           if (t.notes !== undefined) {
             updateData.notes = typeof t.notes === 'string' ? t.notes.trim() || null : null;
           }
+          if (t.link !== undefined) {
+            updateData.link = typeof t.link === 'string' ? t.link.trim() || null : null;
+          }
           if (Object.keys(updateData).length > 0) {
             await Task.update(updateData, {
               where: {
@@ -228,6 +264,7 @@ sessionsRouter.patch('/:id', async (req: AuthenticatedRequest, res: Response) =>
             time_session_id: session.id,
             description: String(t.description).trim(),
             notes: t.notes ? String(t.notes).trim() : null,
+            link: t.link ? String(t.link).trim() : null,
           });
         }
       }

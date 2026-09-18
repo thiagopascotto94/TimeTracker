@@ -54,7 +54,7 @@ export function ClientAutocomplete({
   return (
     <div className="relative" ref={containerRef}>
       {selectedClient ? (
-        <div className="flex items-center justify-between rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2.5 text-sm shadow-xs">
+        <div className="flex items-center justify-between rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2 text-xs shadow-xs">
           <div className="flex items-center gap-2 min-w-0">
             <Briefcase className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
             <div className="min-w-0">
@@ -93,7 +93,7 @@ export function ClientAutocomplete({
             }}
             onFocus={() => setIsOpen(true)}
             placeholder="Pesquisar cliente ou projeto por nome/empresa..."
-            className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 pl-9 pr-9 py-2 text-sm font-medium text-neutral-900 dark:text-neutral-100 placeholder:text-neutral-400 shadow-xs focus:outline-none focus:ring-2 focus:ring-neutral-900 dark:focus:ring-neutral-200"
+            className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 pl-9 pr-9 py-2 text-xs font-medium text-neutral-900 dark:text-neutral-100 placeholder:text-neutral-400 shadow-xs focus:outline-none focus:ring-2 focus:ring-neutral-900 dark:focus:ring-neutral-200"
           />
           {query && (
             <button

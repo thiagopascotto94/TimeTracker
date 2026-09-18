@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 import React, { useState, useEffect, useRef } from 'react';
 import Markdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import {
   Sparkles,
   Send,
@@ -28,18 +29,23 @@ import {
   Users,
   UserPlus,
   Edit3,
+  GitCommit,
 } from 'lucide-react';
-import { User, Tenant, TimeSession, AiChatMessage, AiImageAttachment, AiStep } from '../types';
+import { User, Tenant, TimeSession, AiChatMessage, AiImageAttachment, AiStep, Client } from '../types';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { apiFetch } from '../utils/api';
+import { GitCommitModal } from './GitCommitModal';
 
 interface AiAssistantViewProps {
   user: User | null;
   tenant: Tenant | null;
   activeSession: TimeSession | null;
+  sessions?: TimeSession[];
+  clients?: Client[];
   onRefreshData: () => Promise<void>;
   onNavigateToTimer: () => void;
+  onNavigateToSettings?: () => void;
 }
 
 interface ProviderInfo {
@@ -61,9 +67,13 @@ export function AiAssistantView({
   user,
   tenant,
   activeSession,
+  sessions = [],
+  clients,
   onRefreshData,
   onNavigateToTimer,
+  onNavigateToSettings,
 }: AiAssistantViewProps) {
+  const [gitModalOpen, setGitModalOpen] = useState(false);
   const [messages, setMessages] = useState<AiChatMessage[]>([]);
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(false);
@@ -326,12 +336,17 @@ export function AiAssistantView({
       prompt: 'Analise as tarefas e observações da minha sessão ativa e sugira um título executivo apropriado.',
       icon: Edit3,
     },
+    {
+      label: 'Extrair Tarefas de Commits (Git)',
+      prompt: 'Quero extrair e aprovar tarefas a partir de alterações de commits do Git / GitHub para a minha sessão de trabalho.',
+      icon: GitCommit,
+    },
   ];
 
   return (
     <div
       id="ai-assistant-container"
-      className="w-full max-w-5xl mx-auto flex flex-col h-[calc(100vh-10rem)] min-h-[580px] bg-white dark:bg-neutral-900 rounded-2xl border border-neutral-200 dark:border-neutral-800 shadow-sm overflow-hidden"
+      className="w-full max-w-5xl mx-auto flex flex-col h-[calc(100vh-4.5rem)] sm:h-[calc(100vh-7.5rem)] min-h-[500px] sm:min-h-[580px] bg-white dark:bg-neutral-900 rounded-2xl border border-neutral-200 dark:border-neutral-800 shadow-sm overflow-hidden"
       onDragOver={(e) => {
         e.preventDefault();
         setIsDragOver(true);
@@ -340,18 +355,18 @@ export function AiAssistantView({
       onDrop={handleDrop}
     >
       {/* Header Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3.5 border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50/80 dark:bg-neutral-900/80 backdrop-blur-xs">
-        <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-600 text-white shadow-xs">
-            <Sparkles className="h-5 w-5" />
+      <div className="flex flex-wrap items-center justify-between gap-2 px-3 sm:px-5 py-2.5 sm:py-3.5 border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50/80 dark:bg-neutral-900/80 backdrop-blur-xs">
+        <div className="flex items-center gap-2.5">
+          <div className="flex h-8 w-8 sm:h-9 sm:w-9 items-center justify-center rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-600 text-white shadow-xs">
+            <Sparkles className="h-4 w-4 sm:h-5 sm:w-5" />
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h2 className="text-sm font-bold text-neutral-900 dark:text-neutral-100">
+              <h2 className="text-sm sm:text-base font-bold text-neutral-900 dark:text-neutral-100">
                 Cronos AI
               </h2>
             </div>
-            <p className="text-xs text-neutral-500 dark:text-neutral-400">
+            <p className="text-[11px] sm:text-xs text-neutral-500 dark:text-neutral-400 line-clamp-1 sm:line-clamp-none">
               Controle o cronômetro, analise imagens e consulte histórico via linguagem natural
             </p>
           </div>
@@ -359,6 +374,19 @@ export function AiAssistantView({
 
         {/* Actions */}
         <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => setGitModalOpen(true)}
+            className="h-8 gap-1.5 text-xs border-indigo-200 dark:border-indigo-800/70 bg-indigo-50/60 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 cursor-pointer"
+            title="Extrair tarefas de commits do Git ou GitHub com IA"
+          >
+            <GitCommit className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+            <span className="hidden sm:inline">Importar Commits (Git)</span>
+            <span className="sm:hidden">Git</span>
+          </Button>
+
           {/* Clear Button */}
           {messages.length > 0 && (
             <button
@@ -403,7 +431,7 @@ export function AiAssistantView({
       {/* Messages Scrollable Thread */}
       <div
         id="ai-messages-scroll-area"
-        className={`flex-1 overflow-y-auto p-4 sm:p-6 space-y-6 transition-colors ${
+        className={`flex-1 overflow-y-auto p-3 sm:p-6 space-y-4 sm:space-y-6 transition-colors ${
           isDragOver ? 'bg-indigo-50/40 dark:bg-indigo-950/20' : ''
         }`}
       >
@@ -423,7 +451,7 @@ export function AiAssistantView({
               <h3 className="text-lg font-bold text-neutral-900 dark:text-neutral-100">
                 Assistente Cronos AI
               </h3>
-              <p className="text-sm text-neutral-600 dark:text-neutral-400 leading-relaxed">
+              <p className="text-xs text-neutral-500 dark:text-neutral-400 leading-relaxed">
                 Eu posso iniciar seu cronômetro, adicionar anotações e tarefas, buscar histórico de sessões,
                 analisar imagens (tickets, mockups, anotações) e executar fluxos complexos em até 60 etapas automáticas.
               </p>
@@ -484,7 +512,7 @@ export function AiAssistantView({
 
                 {/* Message Bubble */}
                 <div
-                  className={`flex flex-col space-y-2 rounded-2xl p-4 text-sm leading-relaxed max-w-[88%] sm:max-w-[85%] ${
+                  className={`flex flex-col space-y-2 rounded-2xl p-3.5 sm:p-4 text-sm leading-relaxed max-w-[95%] sm:max-w-[85%] ${
                     isUser
                       ? 'bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 rounded-tr-xs'
                       : 'bg-neutral-50 dark:bg-neutral-800/80 text-neutral-800 dark:text-neutral-200 border border-neutral-200 dark:border-neutral-750 rounded-tl-xs shadow-2xs'
@@ -641,12 +669,132 @@ export function AiAssistantView({
                     </div>
                   )}
 
-                  {/* Main Message Text (with Markdown for AI messages) */}
+                  {/* Main Message Text (with full Markdown and Table support for both user and AI) */}
                   {isUser ? (
-                    <p className="whitespace-pre-wrap">{msg.content}</p>
+                    <div className="space-y-2 leading-relaxed">
+                      <Markdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          p: ({ children }) => <p className="whitespace-pre-wrap leading-relaxed">{children}</p>,
+                          table: ({ node, ...props }) => (
+                            <div className="my-2.5 w-full overflow-x-auto rounded-lg border border-neutral-700 dark:border-neutral-300 bg-neutral-800/80 dark:bg-neutral-200/90 shadow-2xs">
+                              <table className="w-full text-xs text-left border-collapse min-w-[320px]" {...props} />
+                            </div>
+                          ),
+                          thead: ({ node, ...props }) => (
+                            <thead className="bg-neutral-750 dark:bg-neutral-300 text-white dark:text-neutral-900 font-semibold border-b border-neutral-600 dark:border-neutral-400" {...props} />
+                          ),
+                          tbody: ({ node, ...props }) => (
+                            <tbody className="divide-y divide-neutral-700 dark:divide-neutral-300" {...props} />
+                          ),
+                          th: ({ node, ...props }) => (
+                            <th className="px-3 py-2 font-semibold border-r last:border-r-0 border-neutral-650 dark:border-neutral-350" {...props} />
+                          ),
+                          td: ({ node, ...props }) => (
+                            <td className="px-3 py-2 border-r last:border-r-0 border-neutral-700 dark:border-neutral-300 align-top" {...props} />
+                          ),
+                          tr: ({ node, ...props }) => (
+                            <tr className="hover:bg-neutral-750/50 dark:hover:bg-neutral-250/50 transition-colors" {...props} />
+                          ),
+                          ul: ({ node, ...props }) => (
+                            <ul className="list-disc pl-4 space-y-1 my-1.5" {...props} />
+                          ),
+                          ol: ({ node, ...props }) => (
+                            <ol className="list-decimal pl-4 space-y-1 my-1.5" {...props} />
+                          ),
+                          li: ({ node, ...props }) => (
+                            <li className="leading-relaxed" {...props} />
+                          ),
+                          pre: ({ children, ...props }: any) => (
+                            <pre className="bg-neutral-950 dark:bg-neutral-200 text-neutral-100 dark:text-neutral-900 p-3 rounded-lg overflow-x-auto text-xs my-2 font-mono border border-neutral-800 dark:border-neutral-300" {...props}>
+                              {children}
+                            </pre>
+                          ),
+                          code: ({ node, className, children, ...props }: any) => {
+                            const isMultiLine = String(children).includes('\n');
+                            if (!isMultiLine && !className) {
+                              return (
+                                <code className="bg-neutral-800 dark:bg-neutral-200 text-amber-300 dark:text-amber-800 px-1.5 py-0.5 rounded text-xs font-mono font-medium" {...props}>
+                                  {children}
+                                </code>
+                              );
+                            }
+                            return (
+                              <code className={`font-mono text-xs ${className || ''}`} {...props}>
+                                {children}
+                              </code>
+                            );
+                          },
+                        }}
+                      >
+                        {msg.content}
+                      </Markdown>
+                    </div>
                   ) : (
-                    <div className="markdown-body prose dark:prose-invert prose-sm max-w-none text-neutral-800 dark:text-neutral-200 space-y-2">
-                      <Markdown>{msg.content}</Markdown>
+                    <div className="space-y-2 text-neutral-850 dark:text-neutral-150 leading-relaxed">
+                      <Markdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          p: ({ children }) => <p className="whitespace-pre-wrap leading-relaxed">{children}</p>,
+                          table: ({ node, ...props }) => (
+                            <div className="my-3 w-full overflow-x-auto rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 shadow-2xs">
+                              <table className="w-full text-xs text-left border-collapse min-w-[340px]" {...props} />
+                            </div>
+                          ),
+                          thead: ({ node, ...props }) => (
+                            <thead className="bg-neutral-100 dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 font-semibold border-b border-neutral-300 dark:border-neutral-700" {...props} />
+                          ),
+                          tbody: ({ node, ...props }) => (
+                            <tbody className="divide-y divide-neutral-200 dark:divide-neutral-800" {...props} />
+                          ),
+                          th: ({ node, ...props }) => (
+                            <th className="px-3.5 py-2.5 font-semibold text-neutral-900 dark:text-neutral-100 border-r last:border-r-0 border-neutral-200 dark:border-neutral-700 whitespace-nowrap bg-neutral-100/90 dark:bg-neutral-800/90" {...props} />
+                          ),
+                          td: ({ node, ...props }) => (
+                            <td className="px-3.5 py-2 text-neutral-800 dark:text-neutral-200 border-r last:border-r-0 border-neutral-200 dark:border-neutral-800 align-top" {...props} />
+                          ),
+                          tr: ({ node, ...props }) => (
+                            <tr className="hover:bg-neutral-50 dark:hover:bg-neutral-850/60 transition-colors" {...props} />
+                          ),
+                          ul: ({ node, ...props }) => (
+                            <ul className="list-disc pl-5 space-y-1 my-2" {...props} />
+                          ),
+                          ol: ({ node, ...props }) => (
+                            <ol className="list-decimal pl-5 space-y-1 my-2" {...props} />
+                          ),
+                          li: ({ node, ...props }) => (
+                            <li className="leading-relaxed" {...props} />
+                          ),
+                          pre: ({ children, ...props }: any) => (
+                            <pre className="bg-neutral-900 dark:bg-neutral-950 text-neutral-100 p-3.5 rounded-xl overflow-x-auto text-xs my-2 font-mono border border-neutral-800 shadow-2xs" {...props}>
+                              {children}
+                            </pre>
+                          ),
+                          code: ({ node, className, children, ...props }: any) => {
+                            const isMultiLine = String(children).includes('\n');
+                            if (!isMultiLine && !className) {
+                              return (
+                                <code className="bg-neutral-200/80 dark:bg-neutral-750 text-neutral-900 dark:text-neutral-100 px-1.5 py-0.5 rounded text-xs font-mono font-medium border border-neutral-300/50 dark:border-neutral-700/50" {...props}>
+                                  {children}
+                                </code>
+                              );
+                            }
+                            return (
+                              <code className={`font-mono text-xs ${className || ''}`} {...props}>
+                                {children}
+                              </code>
+                            );
+                          },
+                          strong: ({ children }) => <strong className="font-semibold text-neutral-900 dark:text-neutral-100">{children}</strong>,
+                          a: ({ href, children }) => (
+                            <a href={href} target="_blank" rel="noreferrer" className="text-indigo-600 dark:text-indigo-400 hover:underline font-medium">
+                              {children}
+                            </a>
+                          ),
+                        }}
+                      >
+                        {msg.content}
+                      </Markdown>
                     </div>
                   )}
 
@@ -793,6 +941,20 @@ export function AiAssistantView({
           <span>Dica: Cole capturas de tela diretamente com Ctrl+V ou arraste imagens aqui.</span>
         </div>
       </div>
+
+      {/* Git Commit & Task Extraction Modal */}
+      <GitCommitModal
+        open={gitModalOpen}
+        onOpenChange={setGitModalOpen}
+        tenant={tenant || null}
+        activeSession={activeSession}
+        sessions={sessions}
+        clients={clients}
+        onTasksCreated={async () => {
+          await onRefreshData();
+        }}
+        onNavigateToSettings={onNavigateToSettings}
+      />
     </div>
   );
 }

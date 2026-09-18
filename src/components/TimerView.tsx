@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Play,
   Square,
@@ -21,8 +21,12 @@ import {
   Sparkles,
   Loader2,
   FileText,
+  GitCommit,
+  ExternalLink,
+  Link as LinkIcon,
 } from 'lucide-react';
-import { TimeSession, TaskItem, Client } from '../types';
+import dayjs from 'dayjs';
+import { TimeSession, TaskItem, Client, Tenant } from '../types';
 import {
   formatTimeHHMMSS,
   formatCurrency,
@@ -39,11 +43,14 @@ import { Badge } from './ui/badge';
 import { Dialog } from './ui/dialog';
 import { useToast } from './ui/toast';
 import { apiFetch } from '../utils/api';
+import { GitCommitModal } from './GitCommitModal';
 
 interface TimerViewProps {
   activeSession: TimeSession | null;
   clients: Client[];
   hourlyRate: number;
+  tenant?: Tenant | null;
+  sessions?: TimeSession[];
   resumeSession?: TimeSession | null;
   onClearResumeSession?: () => void;
   onStartSession: (data: {
@@ -56,9 +63,11 @@ interface TimerViewProps {
   onStopSession: (sessionId: string, finalTitle?: string, finalNotes?: string) => Promise<void>;
   onUpdateSessionTitle?: (sessionId: string, title: string) => Promise<void>;
   onUpdateSessionNotes?: (sessionId: string, notes: string) => Promise<void>;
-  onAddTask: (sessionId: string, description: string, notes?: string) => Promise<void>;
+  onAddTask: (sessionId: string, description: string, notes?: string, link?: string | null) => Promise<void>;
   onUpdateTaskNotes?: (taskId: string, notes: string) => Promise<void>;
   onDeleteTask: (taskId: string) => Promise<void>;
+  onRefreshData?: () => Promise<void>;
+  onNavigateToSettings?: () => void;
   loading: boolean;
 }
 
@@ -66,6 +75,8 @@ export function TimerView({
   activeSession,
   clients,
   hourlyRate,
+  tenant,
+  sessions = [],
   resumeSession,
   onClearResumeSession,
   onStartSession,
@@ -75,9 +86,14 @@ export function TimerView({
   onAddTask,
   onUpdateTaskNotes,
   onDeleteTask,
+  onRefreshData,
+  onNavigateToSettings,
   loading,
 }: TimerViewProps) {
   const { addToast } = useToast();
+
+  // Git Commit Tasks extraction modal state
+  const [gitModalOpen, setGitModalOpen] = useState(false);
 
   // Resilient elapsed time tracking (calculated from server start_time)
   const [elapsedMs, setElapsedMs] = useState<number>(0);
@@ -121,10 +137,18 @@ export function TimerView({
 
   // New session form state
   const [title, setTitle] = useState('');
-  const [startSessionNotes, setStartSessionNotes] = useState('');
-  const [targetMinutes, setTargetMinutes] = useState<number | null>(60);
+  const [targetMinutes, setTargetMinutes] = useState<number | null>(() => {
+    return tenant?.default_target_minutes !== undefined ? tenant.default_target_minutes : 60;
+  });
   const [customTarget, setCustomTarget] = useState('');
   const [clientId, setClientId] = useState<string>('');
+
+  // Synchronize workspace default target when tenant loads/changes
+  useEffect(() => {
+    if (tenant?.default_target_minutes !== undefined) {
+      setTargetMinutes(tenant.default_target_minutes);
+    }
+  }, [tenant?.default_target_minutes]);
 
   // Handle resumeSession prop synchronization
   useEffect(() => {
@@ -140,13 +164,43 @@ export function TimerView({
 
   // Target reached alert guard (only trigger once per session)
   const alertTriggeredRef = useRef<boolean>(false);
+  const clientDailyAlertTriggeredRef = useRef<boolean>(false);
   const activeSessionIdRef = useRef<string | null>(null);
+
+  // Active Client & Daily Target Calculation (Calculated identically to Objetivo de Tempo)
+  const activeClientId = activeSession?.client_id || (activeSession?.Client?.id ?? null);
+  const runningClient = clients.find((c) => c.id === activeClientId) || activeSession?.Client || activeSession?.client;
+
+  // Client daily target: specific client target or workspace default client target
+  const clientDailyTargetMinutes = runningClient?.daily_target_minutes ?? (tenant?.default_client_daily_target_minutes ?? null);
+  const clientDailyTargetMs = clientDailyTargetMinutes && clientDailyTargetMinutes > 0 ? clientDailyTargetMinutes * 60 * 1000 : null;
+
+  // Accumulated completed time today for this client from other sessions
+  const todayClientCompletedMs = useMemo(() => {
+    if (!activeClientId || !sessions || sessions.length === 0) return 0;
+    const todayStr = dayjs().format('YYYY-MM-DD');
+    return sessions
+      .filter((s) => {
+        if (s.client_id !== activeClientId) return false;
+        if (s.id === activeSession?.id) return false;
+        if (!s.start_time) return false;
+        return dayjs(s.start_time).format('YYYY-MM-DD') === todayStr;
+      })
+      .reduce((acc, s) => {
+        if (s.metrics?.durationMs) return acc + s.metrics.durationMs;
+        if (s.start_time && s.end_time) {
+          return acc + Math.max(0, new Date(s.end_time).getTime() - new Date(s.start_time).getTime());
+        }
+        return acc;
+      }, 0);
+  }, [sessions, activeClientId, activeSession?.id]);
 
   // Reset alert trigger when active session changes
   useEffect(() => {
     if (activeSession?.id !== activeSessionIdRef.current) {
       activeSessionIdRef.current = activeSession?.id || null;
       alertTriggeredRef.current = false;
+      clientDailyAlertTriggeredRef.current = false;
     }
   }, [activeSession?.id]);
 
@@ -162,7 +216,7 @@ export function TimerView({
       const currentElapsed = calculateElapsedMs(activeSession.start_time);
       setElapsedMs(currentElapsed);
 
-      // Check target alert (RF04)
+      // Check session target alert (RF04)
       if (activeSession.target_minutes && activeSession.target_minutes > 0) {
         const targetMs = activeSession.target_minutes * 60 * 1000;
         if (currentElapsed >= targetMs && !alertTriggeredRef.current) {
@@ -180,6 +234,26 @@ export function TimerView({
           });
         }
       }
+
+      // Check client daily target alert (calculado da mesma forma que Objetivo de Tempo)
+      if (clientDailyTargetMs && clientDailyTargetMinutes && clientDailyTargetMinutes > 0) {
+        const totalClientMsNow = todayClientCompletedMs + currentElapsed;
+        if (totalClientMsNow >= clientDailyTargetMs && !clientDailyAlertTriggeredRef.current) {
+          clientDailyAlertTriggeredRef.current = true;
+          if (soundEnabled) {
+            playGoalChime();
+          }
+          const clientDisplayName = runningClient?.name || 'Cliente';
+          addToast({
+            title: '🎯 Meta diária do cliente atingida!',
+            description: `Você completou a meta diária de ${clientDailyTargetMinutes} minutos hoje para ${clientDisplayName}.`,
+            variant: 'amber',
+          });
+          showNativeNotification('🎯 Meta diária do cliente atingida!', {
+            body: `Você completou a meta diária de ${clientDailyTargetMinutes} minutos hoje para "${clientDisplayName}".`,
+          });
+        }
+      }
     };
 
     // Initial update
@@ -188,20 +262,19 @@ export function TimerView({
     // 1-second interval for clock display
     const interval = setInterval(updateTimer, 1000);
     return () => clearInterval(interval);
-  }, [activeSession, soundEnabled, addToast]);
+  }, [activeSession, soundEnabled, addToast, clientDailyTargetMs, clientDailyTargetMinutes, todayClientCompletedMs, runningClient?.name]);
 
   const handleStart = async (e: React.FormEvent) => {
     e.preventDefault();
     const finalTarget = customTarget ? Number(customTarget) : targetMinutes;
     await onStartSession({
       title: title.trim(),
-      notes: startSessionNotes.trim() || null,
+      notes: null,
       target_minutes: finalTarget && finalTarget > 0 ? finalTarget : null,
       previous_session_id: resumeSession ? resumeSession.id : null,
       client_id: clientId ? clientId : null,
     });
     setTitle('');
-    setStartSessionNotes('');
     setCustomTarget('');
     setClientId('');
     if (onClearResumeSession) onClearResumeSession();
@@ -316,6 +389,39 @@ export function TimerView({
     ? Math.min(100, Math.round((elapsedMs / targetMs) * 100))
     : 0;
 
+  // Client Daily Target calculations (identicamente ao Objetivo de Tempo)
+  const todayClientTotalMs = todayClientCompletedMs + (activeClientId ? elapsedMs : 0);
+  const isClientDailyTargetMet = clientDailyTargetMs ? todayClientTotalMs >= clientDailyTargetMs : false;
+  const clientDailyProgressPercent = clientDailyTargetMs
+    ? Math.min(100, Math.round((todayClientTotalMs / clientDailyTargetMs) * 100))
+    : 0;
+
+  // Stopped timer client daily target preview
+  const selectedClient = clients.find((c) => c.id === clientId);
+  const selectedClientDailyTargetMinutes = selectedClient?.daily_target_minutes ?? (tenant?.default_client_daily_target_minutes ?? null);
+  const todaySelectedClientCompletedMs = useMemo(() => {
+    if (!clientId || !sessions || sessions.length === 0) return 0;
+    const todayStr = dayjs().format('YYYY-MM-DD');
+    return sessions
+      .filter((s) => {
+        if (s.client_id !== clientId) return false;
+        if (!s.start_time) return false;
+        return dayjs(s.start_time).format('YYYY-MM-DD') === todayStr;
+      })
+      .reduce((acc, s) => {
+        if (s.metrics?.durationMs) return acc + s.metrics.durationMs;
+        if (s.start_time && s.end_time) {
+          return acc + Math.max(0, new Date(s.end_time).getTime() - new Date(s.start_time).getTime());
+        }
+        return acc;
+      }, 0);
+  }, [sessions, clientId]);
+  const selectedClientDailyTargetMs = selectedClientDailyTargetMinutes && selectedClientDailyTargetMinutes > 0 ? selectedClientDailyTargetMinutes * 60 * 1000 : null;
+  const selectedClientProgressPercent = selectedClientDailyTargetMs
+    ? Math.min(100, Math.round((todaySelectedClientCompletedMs / selectedClientDailyTargetMs) * 100))
+    : 0;
+  const isSelectedClientDailyTargetMet = selectedClientDailyTargetMs ? todaySelectedClientCompletedMs >= selectedClientDailyTargetMs : false;
+
   // Real-time billable value (using client custom rate if available)
   const activeClient = activeSession?.Client || activeSession?.client;
   const sessionHourlyRate = activeClient?.hourly_rate ?? hourlyRate;
@@ -339,14 +445,17 @@ export function TimerView({
             }`}
           >
             <CardHeader className="pb-3 border-b border-neutral-100 dark:border-neutral-800">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div className="space-y-1.5 flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="flex h-2.5 w-2.5 rounded-full bg-emerald-500 animate-ping" />
+              <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                <div className="space-y-2 flex-1 min-w-0">
+                  <div className="flex items-center gap-2 whitespace-nowrap">
+                    <span className="flex h-2.5 w-2.5 rounded-full bg-emerald-500 animate-ping shrink-0" />
                     <span className="text-xs font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
                       Sessão em Andamento
                     </span>
-                    {activeSession.target_minutes && (
+                  </div>
+
+                  {activeSession.target_minutes && (
+                    <div className="flex items-center">
                       <Badge
                         variant={isTargetMet ? 'amber' : 'outline'}
                         className="text-xs gap-1"
@@ -355,8 +464,25 @@ export function TimerView({
                         Meta: {activeSession.target_minutes} min
                         {isTargetMet && ' (Atingida!)'}
                       </Badge>
-                    )}
-                  </div>
+                    </div>
+                  )}
+
+                  {clientDailyTargetMinutes && clientDailyTargetMinutes > 0 && (
+                    <div className="flex items-center">
+                      <Badge
+                        variant={isClientDailyTargetMet ? 'amber' : 'outline'}
+                        className={`text-xs gap-1 ${
+                          isClientDailyTargetMet
+                            ? 'border-amber-400 bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-300 font-semibold'
+                            : 'border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300'
+                        }`}
+                      >
+                        <Target className="w-3 h-3 text-indigo-500" />
+                        Meta Diária ({runningClient?.name || 'Cliente'}): {clientDailyTargetMinutes} min
+                        {isClientDailyTargetMet && ' (Atingida!)'}
+                      </Badge>
+                    </div>
+                  )}
 
                   {/* Title View or Inline Edit */}
                   {isEditingTitle ? (
@@ -518,7 +644,7 @@ export function TimerView({
                         value={inlineNotes}
                         onChange={(e) => setInlineNotes(e.target.value)}
                         placeholder="Observações da sessão..."
-                        rows={2}
+                        rows={3}
                         className="w-full text-xs p-2 rounded-md border border-amber-300 dark:border-amber-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 focus:outline-none focus:ring-2 focus:ring-amber-500/50"
                       />
                       <div className="flex justify-end gap-1.5">
@@ -560,7 +686,7 @@ export function TimerView({
                         value={inlineNotes}
                         onChange={(e) => setInlineNotes(e.target.value)}
                         placeholder="Observações ou anotações contextuais da sessão de trabalho..."
-                        rows={2}
+                        rows={3}
                         className="w-full text-xs p-2.5 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 focus:outline-none focus:ring-2 focus:ring-amber-500/50"
                         autoFocus
                       />
@@ -614,16 +740,16 @@ export function TimerView({
                 </div>
 
                 {/* Sub-metrics: start time and billable amount */}
-                <div className="mt-3 flex flex-wrap items-center justify-center gap-4 text-sm text-neutral-500 dark:text-neutral-400">
+                <div className="mt-3 flex flex-wrap items-center justify-center gap-4 text-xs text-neutral-500 dark:text-neutral-400">
                   <div className="flex items-center gap-1">
                     <Clock className="w-3.5 h-3.5 text-neutral-400" />
                     <span>Início: {formatDateTime(activeSession.start_time)}</span>
                   </div>
                   <span className="text-neutral-300 dark:text-neutral-700">•</span>
                   <div className="flex items-center gap-1 text-emerald-700 dark:text-emerald-400 font-semibold">
-                    <DollarSign className="w-4 h-4" />
+                    <DollarSign className="w-3.5 h-3.5" />
                     <span>Faturamento Atual: {formatCurrency(currentBillable)}</span>
-                    <span className="text-xs font-normal text-neutral-400">
+                    <span className="text-2xs font-normal text-neutral-400">
                       ({decimalHours.toFixed(2)}h @ {formatCurrency(hourlyRate)}/h)
                     </span>
                   </div>
@@ -633,7 +759,7 @@ export function TimerView({
                 {activeSession.target_minutes && activeSession.target_minutes > 0 && (
                   <div className="w-full max-w-md mt-5 space-y-1.5">
                     <div className="flex justify-between text-xs font-medium">
-                      <span className="text-neutral-500 dark:text-neutral-400">Progresso da Meta</span>
+                      <span className="text-neutral-500 dark:text-neutral-400">Progresso da Meta da Sessão</span>
                       <span className={isTargetMet ? 'text-amber-600 dark:text-amber-400 font-bold' : 'text-neutral-700 dark:text-neutral-300'}>
                         {progressPercent}% ({Math.round(elapsedMs / 60000)} / {activeSession.target_minutes} min)
                       </span>
@@ -646,6 +772,34 @@ export function TimerView({
                         style={{ width: `${progressPercent}%` }}
                       />
                     </div>
+                  </div>
+                )}
+
+                {/* Client Daily Target Progress Bar (Calculado da mesma forma que Objetivo de Tempo) */}
+                {clientDailyTargetMinutes && clientDailyTargetMinutes > 0 && (
+                  <div className="w-full max-w-md mt-4 space-y-1.5 p-3 rounded-lg border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/50 dark:bg-indigo-950/30">
+                    <div className="flex justify-between text-xs font-medium">
+                      <span className="text-indigo-950 dark:text-indigo-200 font-semibold flex items-center gap-1.5">
+                        <Target className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                        Meta Diária ({runningClient?.name || 'Cliente'}):
+                      </span>
+                      <span className={isClientDailyTargetMet ? 'text-amber-600 dark:text-amber-400 font-bold' : 'text-neutral-700 dark:text-neutral-300'}>
+                        {clientDailyProgressPercent}% ({Math.round(todayClientTotalMs / 60000)} / {clientDailyTargetMinutes} min)
+                      </span>
+                    </div>
+                    <div className="h-2 w-full bg-indigo-100 dark:bg-neutral-800 rounded-full overflow-hidden border border-indigo-200/70 dark:border-neutral-700">
+                      <div
+                        className={`h-full transition-all duration-300 rounded-full ${
+                          isClientDailyTargetMet ? 'bg-amber-500' : 'bg-indigo-600 dark:bg-indigo-400'
+                        }`}
+                        style={{ width: `${clientDailyProgressPercent}%` }}
+                      />
+                    </div>
+                    {isClientDailyTargetMet && (
+                      <p className="text-2xs text-amber-700 dark:text-amber-400 font-semibold text-right">
+                        🎯 Meta diária do cliente atingida com sucesso hoje!
+                      </p>
+                    )}
                   </div>
                 )}
               </div>
@@ -673,18 +827,33 @@ export function TimerView({
           {/* REAL-TIME TASKS & NOTES (RF05 & RF6.2) */}
           <Card className="border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shadow-xs">
             <CardHeader className="pb-3 border-b border-neutral-100 dark:border-neutral-800">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col gap-2.5">
                 <div>
                   <CardTitle className="text-base font-semibold text-neutral-900 dark:text-neutral-100">
                     Tarefas &amp; Anotações da Sessão
                   </CardTitle>
+                </div>
+                <div>
                   <CardDescription className="text-xs text-neutral-500 dark:text-neutral-400">
                     Adicione anotações em tempo real do que está sendo executado. Pressione Enter para salvar.
                   </CardDescription>
                 </div>
-                <Badge variant="secondary" className="text-xs">
-                  {activeTasks.length} {activeTasks.length === 1 ? 'tarefa' : 'tarefas'}
-                </Badge>
+                <div className="flex items-center justify-between gap-2 pt-1 border-t border-neutral-100 dark:border-neutral-800/60">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setGitModalOpen(true)}
+                    className="h-8 gap-1.5 text-xs border-indigo-200 dark:border-indigo-800/70 bg-indigo-50/50 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 cursor-pointer"
+                    title="Importar ou sugerir tarefas a partir de commits do Git / GitHub com IA"
+                  >
+                    <GitCommit className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                    <span>Importar de Commits (Git)</span>
+                  </Button>
+                  <Badge variant="secondary" className="text-xs">
+                    {activeTasks.length} {activeTasks.length === 1 ? 'tarefa' : 'tarefas'}
+                  </Badge>
+                </div>
               </div>
             </CardHeader>
 
@@ -695,7 +864,7 @@ export function TimerView({
                   value={taskInput}
                   onChange={(e) => setTaskInput(e.target.value)}
                   placeholder="Ex: Refatoração do módulo de autenticação e testes unitários..."
-                  className="flex-1 text-sm"
+                  className="flex-1 text-xs"
                   disabled={loading}
                   autoFocus
                 />
@@ -719,72 +888,116 @@ export function TimerView({
                     return (
                       <li
                         key={task.id}
-                        className="transition-colors hover:bg-white dark:hover:bg-neutral-800"
+                        className="transition-colors hover:bg-white dark:hover:bg-neutral-800 px-4 py-3 text-xs space-y-2.5"
                       >
-                        <div className="flex items-center justify-between gap-3 px-4 py-3 text-sm">
-                          {/* Clicking on the task allows filling or editing its observation */}
-                          <div
-                            className="flex items-start gap-2.5 min-w-0 flex-1 cursor-pointer group"
-                            onClick={() => {
-                              if (isEditingThisTask) {
-                                setEditingTaskId(null);
-                              } else {
-                                setEditingTaskId(task.id);
-                                setTaskNotesValue(task.notes || '');
-                              }
-                            }}
-                            title="Clique nesta tarefa para preencher ou visualizar observações"
-                          >
-                            <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
-                            <div className="min-w-0 flex-1">
-                              <span className="text-neutral-800 dark:text-neutral-200 break-words leading-relaxed group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors font-medium">
-                                {task.description}
+                        {/* Task Header / Description */}
+                        <div
+                          className="flex items-start gap-2.5 cursor-pointer group"
+                          onClick={() => {
+                            if (isEditingThisTask) {
+                              setEditingTaskId(null);
+                            } else {
+                              setEditingTaskId(task.id);
+                              setTaskNotesValue(task.notes || '');
+                            }
+                          }}
+                          title="Clique nesta tarefa para preencher ou visualizar observações"
+                        >
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
+                          <div className="min-w-0 flex-1">
+                            <span className="text-neutral-900 dark:text-neutral-100 break-words leading-relaxed group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors font-medium text-sm">
+                              {task.description}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Secondary Row: Badges / Links & Action buttons in new lines */}
+                        <div className="flex flex-wrap items-center justify-between gap-2.5 pt-2 border-t border-neutral-100 dark:border-neutral-800/60">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {task.link && (
+                              <a
+                                href={task.link}
+                                target="_blank"
+                                rel="noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                                className="inline-flex items-center gap-1.5 text-2xs font-semibold px-2.5 py-1 rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 shadow-2xs hover:bg-indigo-100 dark:hover:bg-indigo-900/80 transition-colors"
+                                title={`Abrir commit no repositório: ${task.link}`}
+                              >
+                                <ExternalLink className="w-3 h-3 text-indigo-600 dark:text-indigo-400" />
+                                <span>Commit</span>
+                              </a>
+                            )}
+                            {hasNotes ? (
+                              <span
+                                onClick={() => {
+                                  if (isEditingThisTask) {
+                                    setEditingTaskId(null);
+                                  } else {
+                                    setEditingTaskId(task.id);
+                                    setTaskNotesValue(task.notes || '');
+                                  }
+                                }}
+                                className="inline-flex items-center gap-1.5 text-2xs font-semibold px-2.5 py-1 rounded-full bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 shadow-2xs cursor-pointer hover:bg-amber-100 transition-colors"
+                              >
+                                <FileText className="w-3 h-3 text-amber-600 dark:text-amber-400" />
+                                <span>Observação registrada (clique para ver/editar)</span>
                               </span>
-                              <div className="flex items-center gap-2 mt-1">
-                                {hasNotes ? (
-                                  <span className="inline-flex items-center gap-1 text-2xs font-semibold px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 shadow-2xs">
-                                    <FileText className="w-3 h-3 text-amber-600 dark:text-amber-400" />
-                                    <span>Observação registrada (clique para ver/editar)</span>
-                                  </span>
-                                ) : (
-                                  <span className="inline-flex items-center gap-1 text-2xs text-neutral-400 group-hover:text-amber-700 dark:group-hover:text-amber-300 transition-colors">
-                                    <FileText className="w-3 h-3" />
-                                    <span>Clique na tarefa para preencher observações</span>
-                                  </span>
-                                )}
-                              </div>
-                            </div>
+                            ) : (
+                              <span
+                                onClick={() => {
+                                  if (isEditingThisTask) {
+                                    setEditingTaskId(null);
+                                  } else {
+                                    setEditingTaskId(task.id);
+                                    setTaskNotesValue(task.notes || '');
+                                  }
+                                }}
+                                className="inline-flex items-center gap-1.5 text-2xs text-neutral-500 dark:text-neutral-400 hover:text-amber-700 dark:hover:text-amber-300 transition-colors cursor-pointer"
+                              >
+                                <FileText className="w-3 h-3 text-neutral-400" />
+                                <span>+ Adicionar observação</span>
+                              </span>
+                            )}
                           </div>
 
-                          <div className="flex items-center gap-1 shrink-0">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                if (isEditingThisTask) {
-                                  setEditingTaskId(null);
-                                } else {
-                                  setEditingTaskId(task.id);
-                                  setTaskNotesValue(task.notes || '');
-                                }
-                              }}
-                              className="p-1 text-neutral-400 hover:text-amber-600 dark:hover:text-amber-400 rounded transition-colors cursor-pointer"
-                              title={hasNotes ? 'Editar observação' : 'Preencher observação'}
-                            >
-                              <Pencil className="w-3.5 h-3.5" />
-                            </button>
+                          <div className="flex items-center gap-1.5 flex-wrap">
                             <button
                               onClick={() => onDeleteTask(task.id)}
-                              className="p-1 text-neutral-400 hover:text-red-600 dark:hover:text-red-400 rounded transition-colors shrink-0 cursor-pointer"
+                              className="h-8 px-2.5 text-2xs font-medium rounded-md inline-flex items-center justify-center gap-1.5 text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/50 hover:bg-red-100 border border-red-200 dark:border-red-800 transition-colors cursor-pointer shrink-0"
                               title="Remover tarefa"
                             >
-                              <Trash2 className="w-3.5 h-3.5" />
+                              <Trash2 className="w-3 h-3" />
+                              <span>Excluir</span>
                             </button>
                           </div>
                         </div>
 
                         {/* Inline Task Observation Editor (opens ONLY when clicked on the task) */}
                         {isEditingThisTask && (
-                          <div className="px-4 pb-3 pt-2 bg-amber-50/50 dark:bg-amber-950/30 border-t border-amber-100 dark:border-amber-900/40">
+                          <div className="px-4 pb-3 pt-2 bg-amber-50/50 dark:bg-amber-950/30 border-t border-amber-100 dark:border-amber-900/40 space-y-2">
+                            {task.link && (
+                              <div className="flex items-center gap-1.5 text-2xs text-neutral-600 dark:text-neutral-300 bg-white dark:bg-neutral-900 px-2.5 py-1.5 rounded border border-indigo-200 dark:border-indigo-800/80">
+                                <LinkIcon className="w-3 h-3 text-indigo-500 shrink-0" />
+                                <span className="font-semibold text-neutral-500 dark:text-neutral-400">Link do Commit:</span>
+                                <a
+                                  href={task.link}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-indigo-600 dark:text-indigo-400 hover:underline font-mono truncate flex-1"
+                                >
+                                  {task.link}
+                                </a>
+                                <a
+                                  href={task.link}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-indigo-600 dark:text-indigo-400 p-0.5 hover:bg-indigo-50 rounded"
+                                  title="Abrir commit em nova aba"
+                                >
+                                  <ExternalLink className="w-3 h-3" />
+                                </a>
+                              </div>
+                            )}
                             <div className="space-y-2">
                               <label className="flex items-center gap-1.5 text-xs font-semibold text-amber-900 dark:text-amber-200">
                                 <FileText className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
@@ -851,33 +1064,48 @@ export function TimerView({
         /* START NEW SESSION FORM */
         <Card className="border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-[#0a0a0a] shadow-sm">
           <CardHeader>
-            <CardTitle className="text-xl font-bold text-neutral-900 dark:text-neutral-100 tracking-tight">
-              Iniciar Nova Sessão de Trabalho
-            </CardTitle>
-            <CardDescription className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
-              Inicie o cronômetro gerido pelo servidor com objetivo de tempo e vínculo opcional a sessões anteriores.
-            </CardDescription>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <CardTitle className="text-xl font-bold text-neutral-900 dark:text-neutral-100 tracking-tight">
+                  Iniciar Nova Sessão de Trabalho
+                </CardTitle>
+                <CardDescription className="text-xs text-neutral-500 dark:text-neutral-400">
+                  Inicie o cronômetro gerido pelo servidor com objetivo de tempo e vínculo opcional a sessões anteriores.
+                </CardDescription>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setGitModalOpen(true)}
+                className="self-start sm:self-auto h-8 gap-1.5 text-xs border-indigo-200 dark:border-indigo-800/70 bg-indigo-50/50 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 cursor-pointer"
+                title="Extrair tarefas de commits do Git e iniciar sessão com tarefas já aprovadas"
+              >
+                <GitCommit className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                <span>Importar Commits (Git)</span>
+              </Button>
+            </div>
           </CardHeader>
 
           <CardContent>
             <form onSubmit={handleStart} className="space-y-6">
               {/* Session Title / Description */}
               <div className="space-y-1.5">
-                <label className="text-sm font-semibold text-neutral-900 dark:text-neutral-100">
+                <label className="text-xs font-semibold text-neutral-700 dark:text-neutral-300">
                   Título ou Descrição da Sessão
                 </label>
                 <Input
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
                   placeholder="Ex: Desenvolvimento da Feature de Faturamento"
-                  className="text-sm font-medium text-neutral-900 dark:text-neutral-100 placeholder:text-neutral-500 dark:placeholder:text-neutral-400"
+                  className="text-xs font-medium text-neutral-900 dark:text-neutral-100 placeholder:text-neutral-500 dark:placeholder:text-neutral-400"
                 />
               </div>
 
               {/* Target Minutes (RF04) */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <label className="text-sm font-semibold text-neutral-900 dark:text-neutral-100 flex items-center gap-1.5">
+                  <label className="text-xs font-semibold text-neutral-700 dark:text-neutral-300 flex items-center gap-1.5">
                     <Target className="w-4 h-4 text-amber-600 dark:text-amber-400" />
                     <span>Objetivo de Tempo (Alerta quando atingido)</span>
                   </label>
@@ -961,11 +1189,11 @@ export function TimerView({
 
               {/* Client Selection (Autocomplete with debounce) */}
               <div className="space-y-2 pt-3 border-t border-neutral-200 dark:border-neutral-800">
-                <label className="text-sm font-semibold text-neutral-900 dark:text-neutral-100 flex items-center gap-1.5">
+                <label className="text-xs font-semibold text-neutral-700 dark:text-neutral-300 flex items-center gap-1.5">
                   <Briefcase className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
                   <span>Vincular a Cliente / Projeto</span>
                 </label>
-                <p className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                <p className="text-2xs text-neutral-500 dark:text-neutral-400">
                   Pesquise e selecione o cliente para esta sessão (autocomplete com busca em tempo real).
                 </p>
                 <ClientAutocomplete
@@ -974,21 +1202,38 @@ export function TimerView({
                   onSelectClient={setClientId}
                   defaultHourlyRate={hourlyRate}
                 />
-              </div>
 
-              {/* Optional Initial Session Observation */}
-              <div className="space-y-1.5 pt-3 border-t border-neutral-200 dark:border-neutral-800">
-                <label className="text-sm font-semibold text-neutral-900 dark:text-neutral-100 flex items-center gap-1.5">
-                  <FileText className="w-4 h-4 text-neutral-500" />
-                  <span>Observações da Sessão (Opcional)</span>
-                </label>
-                <textarea
-                  value={startSessionNotes}
-                  onChange={(e) => setStartSessionNotes(e.target.value)}
-                  placeholder="Anotações contextuais, escopo do trabalho ou observações para vincular a este cronômetro..."
-                  rows={2}
-                  className="w-full text-xs p-2.5 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 placeholder:text-neutral-400 focus:outline-none focus:ring-2 focus:ring-neutral-900 dark:focus:ring-neutral-100"
-                />
+                {/* Selected Client Daily Target Status Preview */}
+                {selectedClient && selectedClientDailyTargetMinutes && selectedClientDailyTargetMinutes > 0 ? (
+                  <div className="mt-2 p-3 rounded-lg border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/60 dark:bg-indigo-950/30 space-y-1.5">
+                    <div className="flex items-center justify-between text-xs font-medium">
+                      <span className="text-indigo-900 dark:text-indigo-200 font-semibold flex items-center gap-1.5">
+                        <Target className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                        Meta Diária para {selectedClient.name}:
+                      </span>
+                      <span className={isSelectedClientDailyTargetMet ? 'text-amber-600 dark:text-amber-400 font-bold' : 'text-neutral-700 dark:text-neutral-300'}>
+                        {selectedClientProgressPercent}% ({Math.round(todaySelectedClientCompletedMs / 60000)} / {selectedClientDailyTargetMinutes} min hoje)
+                      </span>
+                    </div>
+                    <div className="h-2 w-full bg-indigo-100 dark:bg-neutral-800 rounded-full overflow-hidden border border-indigo-200/70 dark:border-neutral-700">
+                      <div
+                        className={`h-full transition-all duration-300 rounded-full ${
+                          isSelectedClientDailyTargetMet ? 'bg-amber-500' : 'bg-indigo-600 dark:bg-indigo-400'
+                        }`}
+                        style={{ width: `${selectedClientProgressPercent}%` }}
+                      />
+                    </div>
+                    {isSelectedClientDailyTargetMet ? (
+                      <p className="text-2xs text-amber-700 dark:text-amber-400 font-medium">
+                        ✓ Meta diária já cumprida hoje para este cliente!
+                      </p>
+                    ) : (
+                      <p className="text-2xs text-neutral-500 dark:text-neutral-400">
+                        Resta {Math.max(0, selectedClientDailyTargetMinutes - Math.round(todaySelectedClientCompletedMs / 60000))} minutos para completar a meta de hoje.
+                      </p>
+                    )}
+                  </div>
+                ) : null}
               </div>
 
               {/* Action Buttons */}
@@ -1153,6 +1398,22 @@ export function TimerView({
           </div>
         </form>
       </Dialog>
+
+      {/* Git Commit & Task Extraction Modal (Options 1A & 1B) */}
+      <GitCommitModal
+        open={gitModalOpen}
+        onOpenChange={setGitModalOpen}
+        tenant={tenant || null}
+        activeSession={activeSession}
+        sessions={sessions}
+        clients={clients}
+        onTasksCreated={async () => {
+          if (onRefreshData) {
+            await onRefreshData();
+          }
+        }}
+        onNavigateToSettings={onNavigateToSettings}
+      />
     </div>
   );
 }

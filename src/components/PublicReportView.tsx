@@ -22,6 +22,7 @@ import {
   Eye,
   EyeOff,
   FileText,
+  ExternalLink,
 } from 'lucide-react';
 import { PublicSharedReport } from '../types';
 import {
@@ -270,7 +271,7 @@ export function PublicReportView({ token, onBackToApp }: PublicReportViewProps) 
       <div className="min-h-screen bg-neutral-50 dark:bg-neutral-950 flex items-center justify-center p-4">
         <div className="text-center space-y-3">
           <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-neutral-900 dark:border-neutral-100 border-r-transparent" />
-          <p className="text-sm font-medium text-neutral-600 dark:text-neutral-400">Carregando relatório público...</p>
+          <p className="text-xs font-medium text-neutral-600 dark:text-neutral-400">Carregando relatório público...</p>
         </div>
       </div>
     );
@@ -282,7 +283,7 @@ export function PublicReportView({ token, onBackToApp }: PublicReportViewProps) 
         <Card className="max-w-md w-full border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-6 text-center space-y-4 shadow-sm">
           <AlertCircle className="w-12 h-12 text-red-500 mx-auto" />
           <h2 className="text-lg font-bold text-neutral-900 dark:text-neutral-100">Relatório Indisponível</h2>
-          <p className="text-sm text-neutral-500 dark:text-neutral-400">{error || 'Token de acesso inválido ou expirado.'}</p>
+          <p className="text-xs text-neutral-500 dark:text-neutral-400">{error || 'Token de acesso inválido ou expirado.'}</p>
           {onBackToApp && (
             <Button onClick={onBackToApp} variant="outline" className="text-xs">
               Voltar ao Início
@@ -363,7 +364,7 @@ export function PublicReportView({ token, onBackToApp }: PublicReportViewProps) 
                 <span className="text-2xl sm:text-3xl font-bold font-mono text-emerald-700 dark:text-emerald-400 block mt-0.5">
                   {formatCurrency(data.summary.totalBillableAmount)}
                 </span>
-                <span className="text-xs text-neutral-500 dark:text-neutral-400 font-medium">
+                <span className="text-2xs text-neutral-500 dark:text-neutral-400 font-medium">
                   Soma exata calculada individualmente por sessão/cliente
                 </span>
               </div>
@@ -375,7 +376,7 @@ export function PublicReportView({ token, onBackToApp }: PublicReportViewProps) 
                 <span className="text-2xl sm:text-3xl font-bold font-mono text-indigo-600 dark:text-indigo-400 block mt-0.5">
                   {data.summary.totalDecimalHours.toFixed(2)}h
                 </span>
-                <span className="text-xs text-neutral-500 dark:text-neutral-400 font-medium">
+                <span className="text-2xs text-neutral-500 dark:text-neutral-400 font-medium">
                   {formatDurationHuman(data.summary.totalDurationMs)}
                 </span>
               </div>
@@ -568,18 +569,32 @@ export function PublicReportView({ token, onBackToApp }: PublicReportViewProps) 
                                     <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
                                     <span className="leading-relaxed break-words">{t.description}</span>
                                   </div>
-                                  {/* Task Observation Badge: only displayed if clicked upon */}
-                                  {t.notes && (
-                                    <button
-                                      type="button"
-                                      onClick={() => toggleTaskNote(t.id)}
-                                      className="shrink-0 inline-flex items-center gap-1 text-2xs font-semibold px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 hover:bg-amber-100 dark:hover:bg-amber-900/60 transition-colors cursor-pointer"
-                                      title="Clique para exibir ou ocultar a observação desta tarefa"
-                                    >
-                                      <FileText className="w-2.5 h-2.5 text-amber-600 dark:text-amber-400" />
-                                      <span>Observação</span>
-                                    </button>
-                                  )}
+                                  <div className="flex items-center gap-1.5 shrink-0">
+                                    {t.link && (
+                                      <a
+                                        href={t.link}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="inline-flex items-center gap-1 text-2xs font-semibold px-2 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 transition-colors"
+                                        title={`Abrir commit no repositório: ${t.link}`}
+                                      >
+                                        <ExternalLink className="w-2.5 h-2.5 text-indigo-600 dark:text-indigo-400" />
+                                        <span>Commit</span>
+                                      </a>
+                                    )}
+                                    {/* Task Observation Badge: only displayed if clicked upon */}
+                                    {t.notes && (
+                                      <button
+                                        type="button"
+                                        onClick={() => toggleTaskNote(t.id)}
+                                        className="inline-flex items-center gap-1 text-2xs font-semibold px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 hover:bg-amber-100 dark:hover:bg-amber-900/60 transition-colors cursor-pointer"
+                                        title="Clique para exibir ou ocultar a observação desta tarefa"
+                                      >
+                                        <FileText className="w-2.5 h-2.5 text-amber-600 dark:text-amber-400" />
+                                        <span>Observação</span>
+                                      </button>
+                                    )}
+                                  </div>
                                 </div>
                                 {t.notes && expandedTaskNotes[t.id] && (
                                   <div className="mt-1.5 ml-5 p-2 rounded-md bg-amber-50/80 dark:bg-amber-950/40 border border-amber-200/70 dark:border-amber-800/50 text-xs text-amber-950 dark:text-amber-200 whitespace-pre-wrap leading-relaxed">

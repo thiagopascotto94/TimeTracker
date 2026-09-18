@@ -12,6 +12,9 @@ import { reportsRouter } from './server/routes/reports';
 import { publicRouter } from './server/routes/public';
 import { clientsRouter } from './server/routes/clients';
 import { aiRouter } from './server/routes/ai';
+import { gitRouter } from './server/routes/git';
+import { billingRouter } from './server/routes/billing';
+import { invitesRouter } from './server/routes/invites';
 
 const PORT = 3000;
 const HOST = '0.0.0.0';
@@ -27,8 +30,15 @@ async function startServer() {
     console.error('Failed to initialize database:', err);
   }
 
-  // Middlewares (allow up to 25mb for base64 image uploads)
-  app.use(express.json({ limit: '25mb' }));
+  // Middlewares (allow up to 25mb for base64 image uploads and capture rawBody for Stripe webhooks)
+  app.use(
+    express.json({
+      limit: '25mb',
+      verify: (req: any, _res, buf) => {
+        req.rawBody = buf;
+      },
+    })
+  );
   app.use(express.urlencoded({ extended: true, limit: '25mb' }));
   app.use(cookieParser());
   app.use(
@@ -57,6 +67,9 @@ async function startServer() {
   app.use('/api/public', publicRouter);
   app.use('/api/clients', clientsRouter);
   app.use('/api/ai', aiRouter);
+  app.use('/api/git', gitRouter);
+  app.use('/api/billing', billingRouter);
+  app.use('/api/invites', invitesRouter);
 
   // Vite middleware setup
   if (process.env.NODE_ENV !== 'production') {

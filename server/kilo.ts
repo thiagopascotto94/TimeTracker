@@ -387,6 +387,10 @@ export const OPENAI_TOOLS: ChatCompletionTool[] = [
             type: 'number',
             description: 'Valor cobrado por hora para este cliente em R$ (ex: 180.00).',
           },
+          daily_target_minutes: {
+            type: 'number',
+            description: 'Meta diária de tempo em minutos para este cliente (calculada da mesma forma que o Objetivo de Tempo da sessão).',
+          },
           notes: {
             type: 'string',
             description: 'Observações, particularidades ou escopo acordado com o cliente.',

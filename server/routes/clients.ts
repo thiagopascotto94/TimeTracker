@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import { Client, ClientContact, TimeSession } from '../db';
 import { authMiddleware, AuthenticatedRequest } from '../auth';
+import { checkPlanLimit } from '../billing';
 
 export const clientsRouter = Router();
 
@@ -43,12 +44,34 @@ clientsRouter.get('/', async (req: AuthenticatedRequest, res: Response) => {
 });
 
 // POST /api/clients
-clientsRouter.post('/', async (req: AuthenticatedRequest, res: Response) => {
+clientsRouter.post('/', checkPlanLimit('clients'), async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { name, company, email, hourly_rate, notes } = req.body;
+    const {
+      name,
+      company,
+      email,
+      hourly_rate,
+      daily_target_minutes,
+      notes,
+      git_provider,
+      github_repo,
+      github_token,
+      gitlab_url,
+      gitlab_project,
+      gitlab_token,
+      allowed_repositories,
+    } = req.body;
 
     if (!name || !name.trim()) {
       return res.status(400).json({ error: 'O nome do cliente é obrigatório' });
+    }
+
+    let serializedAllowedRepos: string | null = null;
+    if (allowed_repositories) {
+      serializedAllowedRepos =
+        typeof allowed_repositories === 'string'
+          ? allowed_repositories
+          : JSON.stringify(allowed_repositories);
     }
 
     const client = await Client.create({
@@ -57,7 +80,17 @@ clientsRouter.post('/', async (req: AuthenticatedRequest, res: Response) => {
       company: company?.trim() || null,
       email: email?.trim() || null,
       hourly_rate: hourly_rate ? Number(hourly_rate) : null,
+      daily_target_minutes: daily_target_minutes !== undefined && daily_target_minutes !== null && daily_target_minutes !== ''
+        ? Number(daily_target_minutes)
+        : null,
       notes: notes?.trim() || null,
+      git_provider: git_provider || null,
+      github_repo: github_repo?.trim() || null,
+      github_token: github_token?.trim() || null,
+      gitlab_url: gitlab_url?.trim() || null,
+      gitlab_project: gitlab_project?.trim() || null,
+      gitlab_token: gitlab_token?.trim() || null,
+      allowed_repositories: serializedAllowedRepos,
     });
 
     return res.status(201).json({ message: 'Cliente cadastrado com sucesso', client });
@@ -67,11 +100,63 @@ clientsRouter.post('/', async (req: AuthenticatedRequest, res: Response) => {
   }
 });
 
+// PUT /api/clients/batch-daily-targets (update daily targets for multiple clients at once)
+clientsRouter.put('/batch-daily-targets', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { targets } = req.body; // Array of { id: string, daily_target_minutes: number | null }
+    if (!Array.isArray(targets)) {
+      return res.status(400).json({ error: 'Formato inválido de metas de clientes' });
+    }
+
+    for (const item of targets) {
+      if (item.id) {
+        await Client.update(
+          {
+            daily_target_minutes: item.daily_target_minutes !== null && item.daily_target_minutes !== undefined && item.daily_target_minutes !== ''
+              ? Number(item.daily_target_minutes)
+              : null,
+          },
+          {
+            where: {
+              id: item.id,
+              tenant_id: req.tenantId!,
+            },
+          }
+        );
+      }
+    }
+
+    const updatedClients = await Client.findAll({
+      where: { tenant_id: req.tenantId! },
+      order: [['name', 'ASC']],
+    });
+
+    return res.json({ message: 'Metas diárias atualizadas com sucesso', clients: updatedClients });
+  } catch (err: any) {
+    console.error('Error updating batch daily targets:', err);
+    return res.status(500).json({ error: 'Erro ao atualizar metas diárias dos clientes' });
+  }
+});
+
 // PUT /api/clients/:id
 clientsRouter.put('/:id', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const { name, company, email, hourly_rate, notes } = req.body;
+    const {
+      name,
+      company,
+      email,
+      hourly_rate,
+      daily_target_minutes,
+      notes,
+      git_provider,
+      github_repo,
+      github_token,
+      gitlab_url,
+      gitlab_project,
+      gitlab_token,
+      allowed_repositories,
+    } = req.body;
 
     const client = await Client.findOne({
       where: {
@@ -88,7 +173,26 @@ clientsRouter.put('/:id', async (req: AuthenticatedRequest, res: Response) => {
     if (company !== undefined) client.company = company ? company.trim() : null;
     if (email !== undefined) client.email = email ? email.trim() : null;
     if (hourly_rate !== undefined) client.hourly_rate = hourly_rate ? Number(hourly_rate) : null;
+    if (daily_target_minutes !== undefined) {
+      client.daily_target_minutes = daily_target_minutes !== null && daily_target_minutes !== ''
+        ? Number(daily_target_minutes)
+        : null;
+    }
     if (notes !== undefined) client.notes = notes ? notes.trim() : null;
+    if (git_provider !== undefined) client.git_provider = git_provider || null;
+    if (github_repo !== undefined) client.github_repo = github_repo ? github_repo.trim() : null;
+    if (github_token !== undefined) client.github_token = github_token ? github_token.trim() : null;
+    if (gitlab_url !== undefined) client.gitlab_url = gitlab_url ? gitlab_url.trim() : null;
+    if (gitlab_project !== undefined) client.gitlab_project = gitlab_project ? gitlab_project.trim() : null;
+    if (gitlab_token !== undefined) client.gitlab_token = gitlab_token ? gitlab_token.trim() : null;
+    if (allowed_repositories !== undefined) {
+      client.allowed_repositories =
+        allowed_repositories === null
+          ? null
+          : typeof allowed_repositories === 'string'
+          ? allowed_repositories
+          : JSON.stringify(allowed_repositories);
+    }
 
     await client.save();
 

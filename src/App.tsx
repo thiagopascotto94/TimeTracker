@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Lock, LogIn, Sparkles } from 'lucide-react';
-import { User, Tenant, TimeSession, TaskItem, Client } from './types';
+import { User, Tenant, TimeSession, TaskItem, Client, GitRepositoryItem } from './types';
 import { ToastProvider, useToast } from './components/ui/toast';
 import { Button } from './components/ui/button';
 import { Navbar } from './components/Navbar';
@@ -8,13 +8,65 @@ import { TimerView } from './components/TimerView';
 import { ReportsView } from './components/ReportsView';
 import { HistoryView } from './components/HistoryView';
 import { ClientsView } from './components/ClientsView';
+import { ClientFormView } from './components/ClientFormView';
+import { ClientContactsView } from './components/ClientContactsView';
 import { SettingsView } from './components/SettingsView';
 import { PublicReportView } from './components/PublicReportView';
 import { AuthModal } from './components/AuthModal';
 import { LoginView } from './components/LoginView';
+import { InviteAcceptView } from './components/InviteAcceptView';
 import { AiAssistantView } from './components/AiAssistantView';
+import { SessionEditView } from './components/SessionEditView';
 import { formatCurrency, formatDurationHuman } from './utils/format';
 import { apiFetch } from './utils/api';
+
+export type TabType = 'timer' | 'reports' | 'history' | 'clients' | 'client-new' | 'client-edit' | 'client-contacts' | 'session-edit' | 'settings' | 'assistant';
+const VALID_TABS: readonly TabType[] = ['timer', 'reports', 'history', 'clients', 'client-new', 'client-edit', 'client-contacts', 'session-edit', 'settings', 'assistant'] as const;
+
+function getTabFromUrl(): { tab: TabType; clientId?: string; sessionId?: string; reportsSubTab?: 'overview' | 'shared-links' } {
+  if (typeof window === 'undefined') return { tab: 'timer' };
+
+  const path = window.location.pathname.replace(/^\/+|\/+$/g, '').toLowerCase();
+
+  if (path === 'reports/approved' || path === 'reports/shared' || path === 'reports/links') {
+    return { tab: 'reports', reportsSubTab: 'shared-links' };
+  }
+  if (path === 'clients/new' || path === 'client/new') {
+    return { tab: 'client-new' };
+  }
+  const editMatch = path.match(/^clients\/edit\/([a-zA-Z0-9_-]+)$/) || path.match(/^client\/([a-zA-Z0-9_-]+)\/edit$/);
+  if (editMatch && editMatch[1]) {
+    return { tab: 'client-edit', clientId: editMatch[1] };
+  }
+  const contactsMatch = path.match(/^clients\/contacts\/([a-zA-Z0-9_-]+)$/) || path.match(/^client\/([a-zA-Z0-9_-]+)\/contacts$/);
+  if (contactsMatch && contactsMatch[1]) {
+    return { tab: 'client-contacts', clientId: contactsMatch[1] };
+  }
+  const sessionEditMatch = path.match(/^sessions\/edit\/([a-zA-Z0-9_-]+)$/) || path.match(/^session\/([a-zA-Z0-9_-]+)\/edit$/);
+  if (sessionEditMatch && sessionEditMatch[1]) {
+    return { tab: 'session-edit', sessionId: sessionEditMatch[1] };
+  }
+
+  const urlParams = new URLSearchParams(window.location.search);
+  const subTabParam = urlParams.get('subtab') || urlParams.get('sub');
+  const hash = window.location.hash.replace(/^#\/?/, '').toLowerCase();
+  const reportsSubTab = subTabParam === 'shared-links' || subTabParam === 'approved' || hash === 'reports-approved' ? 'shared-links' : undefined;
+
+  if (VALID_TABS.includes(path as TabType)) {
+    return { tab: path as TabType, reportsSubTab };
+  }
+
+  const tabParam = (urlParams.get('tab') || urlParams.get('page'))?.toLowerCase();
+  if (tabParam && VALID_TABS.includes(tabParam as TabType)) {
+    return { tab: tabParam as TabType, reportsSubTab };
+  }
+
+  if (VALID_TABS.includes(hash as TabType)) {
+    return { tab: hash as TabType, reportsSubTab };
+  }
+
+  return { tab: 'timer' };
+}
 
 function AppContent() {
   const { addToast } = useToast();
@@ -37,8 +89,99 @@ function AppContent() {
     return null;
   });
 
-  // Main App State
-  const [activeTab, setActiveTab] = useState<'timer' | 'reports' | 'history' | 'clients' | 'settings' | 'assistant'>('timer');
+  // Invite Token detection (POST /api/invites/:token/accept flow)
+  const [inviteToken, setInviteToken] = useState<string | null>(() => {
+    const pathMatch = window.location.pathname.match(/\/invite\/([a-zA-Z0-9_-]+)/);
+    if (pathMatch && pathMatch[1]) return pathMatch[1];
+    const urlParams = new URLSearchParams(window.location.search);
+    const invParam = urlParams.get('invite') || urlParams.get('invite_token') || urlParams.get('inviteToken');
+    if (invParam) return invParam;
+    return null;
+  });
+
+  // Main App State with URL and LocalStorage persistence
+  const initialRoute = getTabFromUrl();
+  const [activeTab, setActiveTabState] = useState<TabType>(() => {
+    if (initialRoute.tab) return initialRoute.tab;
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('last_active_tab') as TabType;
+        if (saved && VALID_TABS.includes(saved)) return saved;
+      } catch (e) {
+        // Ignore
+      }
+    }
+    return 'timer';
+  });
+
+  const [selectedClientId, setSelectedClientId] = useState<string | null>(initialRoute.clientId || null);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(initialRoute.sessionId || null);
+  const [reportsSubTab, setReportsSubTab] = useState<'overview' | 'shared-links'>(initialRoute.reportsSubTab || 'overview');
+
+  const setActiveTab = useCallback((tab: TabType, updateHistory = true) => {
+    setActiveTabState(tab);
+    if (tab !== 'client-edit' && tab !== 'client-contacts') {
+      setSelectedClientId(null);
+    }
+    if (tab !== 'session-edit') {
+      setSelectedSessionId(null);
+    }
+    try {
+      localStorage.setItem('last_active_tab', tab);
+    } catch (e) {
+      // Ignore
+    }
+
+    if (updateHistory && typeof window !== 'undefined') {
+      let url = `/${tab}`;
+      if (tab === 'client-new') url = '/clients/new';
+      const currentCleanPath = window.location.pathname.replace(/^\/+|\/+$/g, '').toLowerCase();
+      if (currentCleanPath !== tab && !window.location.pathname.startsWith('/shared/')) {
+        window.history.pushState({ tab }, '', url);
+      }
+    }
+  }, []);
+
+  const navigateToNewClient = () => {
+    setActiveTabState('client-new');
+    setSelectedClientId(null);
+    if (typeof window !== 'undefined') {
+      window.history.pushState({ tab: 'client-new' }, '', '/clients/new');
+    }
+  };
+
+  const navigateToEditClient = (clientId: string) => {
+    setActiveTabState('client-edit');
+    setSelectedClientId(clientId);
+    if (typeof window !== 'undefined') {
+      window.history.pushState({ tab: 'client-edit', clientId }, '', `/clients/edit/${clientId}`);
+    }
+  };
+
+  const navigateToClientContacts = (clientId: string) => {
+    setActiveTabState('client-contacts');
+    setSelectedClientId(clientId);
+    if (typeof window !== 'undefined') {
+      window.history.pushState({ tab: 'client-contacts', clientId }, '', `/clients/contacts/${clientId}`);
+    }
+  };
+
+  const navigateToEditSession = (sessionId: string) => {
+    setActiveTabState('session-edit');
+    setSelectedSessionId(sessionId);
+    if (typeof window !== 'undefined') {
+      window.history.pushState({ tab: 'session-edit', sessionId }, '', `/sessions/edit/${sessionId}`);
+    }
+  };
+
+  const navigateToClientsList = () => {
+    setActiveTab('clients');
+  };
+
+  const navigateToHistory = () => {
+    setActiveTab('history');
+  };
+
   const [user, setUser] = useState<User | null>(null);
   const [tenant, setTenant] = useState<Tenant | null>(null);
   const [activeSession, setActiveSession] = useState<TimeSession | null>(null);
@@ -71,14 +214,39 @@ function AppContent() {
     setTheme((prev) => (prev === 'light' ? 'dark' : 'light'));
   };
 
-  // Listen to popstate or hashchange
+  // Synchronize initial URL if loaded at root '/' without losing active tab
+  useEffect(() => {
+    if (typeof window !== 'undefined' && !publicToken) {
+      const cleanPath = window.location.pathname.replace(/^\/+|\/+$/g, '').toLowerCase();
+      if (!cleanPath && !window.location.search && !window.location.hash) {
+        window.history.replaceState({ tab: activeTab }, '', `/${activeTab}`);
+      }
+    }
+  }, [activeTab, publicToken]);
+
+  // Listen to popstate or hashchange (Browser back/forward buttons and direct URL navigation)
   useEffect(() => {
     const handleUrlChange = () => {
       const pathMatch = window.location.pathname.match(/\/shared\/([a-zA-Z0-9_-]+)/);
       const hashMatch = window.location.hash.match(/shared\/([a-zA-Z0-9_-]+)/);
       const urlParams = new URLSearchParams(window.location.search);
       const token = pathMatch?.[1] || hashMatch?.[1] || urlParams.get('share') || urlParams.get('token');
-      setPublicToken(token || null);
+      
+      if (token) {
+        setPublicToken(token);
+        return;
+      } else {
+        setPublicToken(null);
+      }
+
+      const urlRoute = getTabFromUrl();
+      if (urlRoute && urlRoute.tab) {
+        setActiveTabState(urlRoute.tab);
+        setSelectedClientId(urlRoute.clientId || null);
+        try {
+          localStorage.setItem('last_active_tab', urlRoute.tab);
+        } catch (e) {}
+      }
     };
 
     window.addEventListener('popstate', handleUrlChange);
@@ -314,7 +482,7 @@ function AppContent() {
   };
 
   // Handler: Add Task in Real-Time (RF05)
-  const handleAddTask = async (sessionId: string, description: string, notes?: string) => {
+  const handleAddTask = async (sessionId: string, description: string, notes?: string, link?: string | null) => {
     try {
       const res = await apiFetch('/api/tasks', {
         method: 'POST',
@@ -323,6 +491,7 @@ function AppContent() {
           time_session_id: sessionId,
           description,
           notes,
+          link,
         }),
       });
 
@@ -503,7 +672,7 @@ function AppContent() {
       hourly_rate?: number | null;
       notes?: string | null;
       client_id?: string | null;
-      tasks?: Array<{ id?: string; description: string; notes?: string | null; is_deleted?: boolean }>;
+      tasks?: Array<{ id?: string; description: string; notes?: string | null; link?: string | null; is_deleted?: boolean }>;
     }
   ) => {
     try {
@@ -551,6 +720,15 @@ function AppContent() {
     name: string;
     default_hourly_rate: number;
     tenant_name: string;
+    default_target_minutes?: number | null;
+    default_client_daily_target_minutes?: number | null;
+    git_provider?: 'github' | 'gitlab' | null;
+    github_repo?: string | null;
+    github_token?: string | null;
+    gitlab_url?: string | null;
+    gitlab_project?: string | null;
+    gitlab_token?: string | null;
+    allowed_repositories?: string | null | GitRepositoryItem[];
   }) => {
     try {
       setLoading(true);
@@ -571,17 +749,16 @@ function AppContent() {
 
       addToast({
         title: 'Configurações Salvas!',
-        description: `Taxa horária atualizada para ${formatCurrency(
-          data.default_hourly_rate
-        )}/h.`,
+        description: 'Perfil e metas do workspace salvos com sucesso no banco de dados.',
         variant: 'success',
       });
     } catch (err: any) {
       addToast({
-        title: 'Erro ao salvar',
-        description: err.message,
+        title: 'Erro ao Salvar',
+        description: err.message || 'Falha ao comunicar com o servidor.',
         variant: 'destructive',
       });
+      throw err;
     } finally {
       setLoading(false);
     }
@@ -594,7 +771,30 @@ function AppContent() {
         token={publicToken}
         onBackToApp={() => {
           setPublicToken(null);
-          window.history.pushState(null, '', '/');
+          window.history.pushState({ tab: activeTab }, '', `/${activeTab}`);
+        }}
+      />
+    );
+  }
+
+  // Invite Acceptance flow
+  if (inviteToken) {
+    return (
+      <InviteAcceptView
+        token={inviteToken}
+        onAccepted={(loggedInUser, loggedInTenant) => {
+          setUser(loggedInUser);
+          setTenant(loggedInTenant);
+          setInviteToken(null);
+          if (typeof window !== 'undefined') {
+            window.history.replaceState({}, '', '/');
+          }
+        }}
+        onCancel={() => {
+          setInviteToken(null);
+          if (typeof window !== 'undefined') {
+            window.history.replaceState({}, '', '/');
+          }
         }}
       />
     );
@@ -628,7 +828,7 @@ function AppContent() {
     <div className="min-h-screen bg-neutral-50 dark:bg-neutral-950 text-neutral-900 dark:text-neutral-100 flex flex-col font-sans transition-colors">
       {/* Top Navigation */}
       <Navbar
-        activeTab={activeTab}
+        activeTab={activeTab.startsWith('client-') ? 'clients' : activeTab as any}
         setActiveTab={setActiveTab}
         user={user}
         tenant={tenant}
@@ -639,12 +839,14 @@ function AppContent() {
       />
 
       {/* Main Container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 flex flex-col items-center justify-center">
+      <main className={`flex-1 max-w-7xl w-full mx-auto px-2 sm:px-6 lg:px-8 ${activeTab === 'assistant' ? 'py-2 sm:py-8' : 'py-8'} flex flex-col items-center justify-center`}>
         <div className="w-full space-y-6">
             {activeTab === 'timer' && (
               <TimerView
                 activeSession={activeSession}
                 clients={clients}
+                tenant={tenant}
+                sessions={sessions}
                 hourlyRate={hourlyRate}
                 resumeSession={resumeSession}
                 onClearResumeSession={() => setResumeSession(null)}
@@ -655,6 +857,11 @@ function AppContent() {
                 onAddTask={handleAddTask}
                 onUpdateTaskNotes={handleUpdateTaskNotes}
                 onDeleteTask={handleDeleteTask}
+                onRefreshData={async () => {
+                  await fetchActiveSession();
+                  await fetchSessions();
+                }}
+                onNavigateToSettings={() => setActiveTab('settings')}
                 loading={loading}
               />
             )}
@@ -667,6 +874,7 @@ function AppContent() {
                   setPublicToken(token);
                   window.history.pushState(null, '', `/shared/${token}`);
                 }}
+                initialSubTab={reportsSubTab}
               />
             )}
 
@@ -679,15 +887,61 @@ function AppContent() {
                 onDeleteSession={handleDeleteSession}
                 onShareSession={handleShareSession}
                 onUpdateSession={handleUpdateSession}
+                onEditSession={navigateToEditSession}
                 loading={loading}
+              />
+            )}
+
+            {activeTab === 'session-edit' && (
+              <SessionEditView
+                session={sessions.find((s) => s.id === selectedSessionId) || (activeSession?.id === selectedSessionId ? activeSession : null)}
+                clients={clients}
+                hourlyRate={hourlyRate}
+                onUpdateSession={async (sId, data) => {
+                  await handleUpdateSession(sId, data);
+                  navigateToHistory();
+                }}
+                onBack={navigateToHistory}
               />
             )}
 
             {activeTab === 'clients' && (
               <ClientsView
                 clients={clients}
+                tenant={tenant}
                 onRefreshClients={fetchClients}
                 defaultHourlyRate={hourlyRate}
+                onNavigateToNewClient={navigateToNewClient}
+                onNavigateToEditClient={navigateToEditClient}
+                onNavigateToClientContacts={navigateToClientContacts}
+              />
+            )}
+
+            {activeTab === 'client-new' && (
+              <ClientFormView
+                tenant={tenant}
+                onRefreshClients={fetchClients}
+                onBack={navigateToClientsList}
+                defaultHourlyRate={hourlyRate}
+              />
+            )}
+
+            {activeTab === 'client-edit' && (
+              <ClientFormView
+                client={clients.find((c) => c.id === selectedClientId)}
+                tenant={tenant}
+                onRefreshClients={fetchClients}
+                onBack={navigateToClientsList}
+                defaultHourlyRate={hourlyRate}
+              />
+            )}
+
+            {activeTab === 'client-contacts' && selectedClientId && (
+              <ClientContactsView
+                clientId={selectedClientId}
+                clients={clients}
+                onRefreshClients={fetchClients}
+                onBack={navigateToClientsList}
               />
             )}
 
@@ -695,6 +949,8 @@ function AppContent() {
               <SettingsView
                 user={user}
                 tenant={tenant}
+                clients={clients}
+                onRefreshClients={fetchClients}
                 onUpdateProfile={handleUpdateProfile}
                 loading={loading}
               />
@@ -705,12 +961,15 @@ function AppContent() {
                 user={user}
                 tenant={tenant}
                 activeSession={activeSession}
+                sessions={sessions}
+                clients={clients}
                 onRefreshData={async () => {
                   await fetchActiveSession();
                   await fetchSessions();
                   await fetchClients();
                 }}
                 onNavigateToTimer={() => setActiveTab('timer')}
+                onNavigateToSettings={() => setActiveTab('settings')}
               />
             )}
           </div>

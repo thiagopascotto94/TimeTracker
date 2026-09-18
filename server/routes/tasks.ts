@@ -10,7 +10,7 @@ tasksRouter.use(authMiddleware);
 // Cria uma anotação. Requer o time_session_id (ID da sessão ativa)
 tasksRouter.post('/', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { time_session_id, description, notes } = req.body;
+    const { time_session_id, description, notes, link } = req.body;
 
     if (!time_session_id || !description || !description.trim()) {
       return res.status(400).json({ error: 'ID da sessão e descrição da tarefa são obrigatórios' });
@@ -39,6 +39,7 @@ tasksRouter.post('/', async (req: AuthenticatedRequest, res: Response) => {
       time_session_id,
       description: description.trim(),
       notes: notes ? String(notes).trim() : null,
+      link: link ? String(link).trim() : null,
     });
 
     return res.status(201).json({
@@ -51,12 +52,69 @@ tasksRouter.post('/', async (req: AuthenticatedRequest, res: Response) => {
   }
 });
 
+// POST /api/tasks/batch
+// Cria múltiplas tarefas em lote para uma sessão (ex: vindas de aprovação de commits)
+tasksRouter.post('/batch', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { time_session_id, tasks } = req.body || {};
+
+    if (!time_session_id) {
+      return res.status(400).json({ error: 'ID da sessão de tempo é obrigatório' });
+    }
+
+    if (!Array.isArray(tasks) || tasks.length === 0) {
+      return res.status(400).json({ error: 'Lista de tarefas vazia ou inválida' });
+    }
+
+    const session = await TimeSession.findOne({
+      where: {
+        id: time_session_id,
+        tenant_id: req.tenantId!,
+      },
+    });
+
+    if (!session) {
+      return res.status(404).json({ error: 'Sessão de tempo não encontrada' });
+    }
+
+    if (session.is_locked) {
+      return res.status(403).json({
+        error: 'Esta sessão está aprovada e bloqueada no banco de dados. Não é possível adicionar tarefas.',
+      });
+    }
+
+    const createdTasks: Task[] = [];
+    for (const item of tasks) {
+      const desc = item.description || item.title;
+      if (desc && String(desc).trim()) {
+        const created = await Task.create({
+          tenant_id: req.tenantId!,
+          time_session_id,
+          description: String(desc).trim(),
+          notes: item.notes ? String(item.notes).trim() : null,
+          link: item.link ? String(item.link).trim() : null,
+        });
+        createdTasks.push(created);
+      }
+    }
+
+    return res.status(201).json({
+      message: `${createdTasks.length} tarefa(s) adicionada(s) com sucesso à sessão`,
+      tasks: createdTasks,
+      count: createdTasks.length,
+    });
+  } catch (err: any) {
+    console.error('Error creating batch tasks:', err);
+    res.status(500).json({ error: 'Erro ao criar tarefas em lote' });
+  }
+});
+
 // PATCH /api/tasks/:id
 // Atualiza uma anotação de tarefa (ex: observações ou descrição)
 tasksRouter.patch('/:id', async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const { notes, description } = req.body;
+    const { notes, description, link } = req.body;
 
     const task = await Task.findOne({
       where: {
@@ -89,6 +147,10 @@ tasksRouter.patch('/:id', async (req: AuthenticatedRequest, res: Response) => {
 
     if (notes !== undefined) {
       task.notes = typeof notes === 'string' ? notes.trim() || null : null;
+    }
+
+    if (link !== undefined) {
+      task.link = typeof link === 'string' ? link.trim() || null : null;
     }
 
     await task.save();

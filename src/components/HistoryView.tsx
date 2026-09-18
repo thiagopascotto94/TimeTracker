@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Clock,
   DollarSign,
@@ -20,7 +20,11 @@ import {
   Info,
   Check,
   Calendar,
+  ExternalLink,
+  Copy,
+  Search,
 } from 'lucide-react';
+import dayjs from 'dayjs';
 import { TimeSession, Client } from '../types';
 import {
   formatCurrency,
@@ -30,14 +34,17 @@ import {
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './ui/card';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
+import { Input } from './ui/input';
 import { useToast } from './ui/toast';
 import { Dialog } from './ui/dialog';
 import { ClientFilterAutocomplete } from './ClientFilterAutocomplete';
+import { apiFetch } from '../utils/api';
 
 interface EditTaskItem {
   id?: string;
   description: string;
   notes?: string | null;
+  link?: string | null;
   is_deleted?: boolean;
 }
 
@@ -58,6 +65,7 @@ interface HistoryViewProps {
       tasks?: EditTaskItem[];
     }
   ) => Promise<void>;
+  onEditSession: (sessionId: string) => void;
   loading: boolean;
 }
 
@@ -69,26 +77,113 @@ export function HistoryView({
   onDeleteSession,
   onShareSession,
   onUpdateSession,
+  onEditSession,
   loading,
 }: HistoryViewProps) {
   const { addToast } = useToast();
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [clientFilter, setClientFilter] = useState<string>('all');
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [startDate, setStartDate] = useState<string>('');
+  const [endDate, setEndDate] = useState<string>('');
   const [deleteSessionId, setDeleteSessionId] = useState<string | null>(null);
   const [expandedSessionNotes, setExpandedSessionNotes] = useState<Record<string, boolean>>({});
   const [expandedTaskNotes, setExpandedTaskNotes] = useState<Record<string, boolean>>({});
 
-  // Edit Modal State
-  const [editingSession, setEditingSession] = useState<TimeSession | null>(null);
-  const [editTitle, setEditTitle] = useState<string>('');
-  const [editHourlyRate, setEditHourlyRate] = useState<string>('');
-  const [editNotes, setEditNotes] = useState<string>('');
-  const [editClientId, setEditClientId] = useState<string>('');
-  const [editTasks, setEditTasks] = useState<EditTaskItem[]>([]);
-  const [newTaskDesc, setNewTaskDesc] = useState<string>('');
-  const [newTaskNotes, setNewTaskNotes] = useState<string>('');
-  const [showNewTaskForm, setShowNewTaskForm] = useState<boolean>(false);
-  const [isSavingEdit, setIsSavingEdit] = useState<boolean>(false);
+  // Share Session Modal State
+  const [sharingSession, setSharingSession] = useState<TimeSession | null>(null);
+  const [shareTitle, setShareTitle] = useState<string>('');
+  const [includeCost, setIncludeCost] = useState<boolean>(true);
+  const [allowApproval, setAllowApproval] = useState<boolean>(true);
+  const [shareLoading, setShareLoading] = useState<boolean>(false);
+  const [generatedShareToken, setGeneratedShareToken] = useState<string | null>(null);
+  const [generatedApprovalCode, setGeneratedApprovalCode] = useState<string | null>(null);
+  const [copied, setCopied] = useState<boolean>(false);
+  const [approvalCopied, setApprovalCopied] = useState<boolean>(false);
+
+  const openShareModal = (s: TimeSession) => {
+    setSharingSession(s);
+    setShareTitle(s.title ? `Relatório: ${s.title}` : 'Relatório da Sessão de Trabalho');
+    setIncludeCost(true);
+    setAllowApproval(true);
+    setGeneratedShareToken(null);
+    setGeneratedApprovalCode(null);
+    setCopied(false);
+    setApprovalCopied(false);
+  };
+
+  const handleEditClick = (s: TimeSession) => {
+    if (s.is_locked) {
+      addToast({
+        title: 'Sessão Bloqueada',
+        description:
+          s.locked_reason ||
+          'Esta sessão já foi aprovada em relatório e não pode mais ser editada.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    onEditSession(s.id);
+  };
+
+  const handleCreateShareToken = async () => {
+    if (!sharingSession) return;
+    try {
+      setShareLoading(true);
+      const res = await apiFetch('/api/reports/share', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: sharingSession.id,
+          title: shareTitle,
+          include_cost: includeCost,
+          allow_approval: allowApproval,
+        }),
+      });
+      if (!res.ok) throw new Error('Erro ao compartilhar sessão');
+      const data = await res.json();
+      setGeneratedShareToken(data.token);
+      setGeneratedApprovalCode(data.approval_code);
+      addToast({
+        title: 'Link Público Gerado!',
+        description: 'Link gerado com sucesso com as preferências de segurança selecionadas.',
+        variant: 'success',
+      });
+    } catch (err: any) {
+      addToast({
+        title: 'Erro ao gerar link',
+        description: err.message,
+        variant: 'destructive',
+      });
+    } finally {
+      setShareLoading(false);
+    }
+  };
+
+  const copyToClipboard = () => {
+    if (!generatedShareToken) return;
+    const url = `${window.location.origin}/shared/${generatedShareToken}`;
+    navigator.clipboard.writeText(url);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+    addToast({
+      title: 'Link copiado!',
+      description: 'Link público copiado para a área de transferência.',
+      variant: 'default',
+    });
+  };
+
+  const copyApprovalCode = () => {
+    if (!generatedApprovalCode) return;
+    navigator.clipboard.writeText(generatedApprovalCode);
+    setApprovalCopied(true);
+    setTimeout(() => setApprovalCopied(false), 2000);
+    addToast({
+      title: 'Código copiado!',
+      description: 'Código de aprovação copiado com sucesso.',
+      variant: 'default',
+    });
+  };
 
   const toggleSessionNote = (sessionId: string) => {
     setExpandedSessionNotes((prev) => ({ ...prev, [sessionId]: !prev[sessionId] }));
@@ -102,156 +197,154 @@ export function HistoryView({
     setExpandedId(expandedId === id ? null : id);
   };
 
-  // Open edit modal for a session
-  const openEditModal = (s: TimeSession) => {
-    if (s.is_locked) {
-      addToast({
-        title: 'Sessão Bloqueada',
-        description:
-          s.locked_reason ||
-          'Esta sessão já foi aprovada em relatório e não pode mais ser editada.',
-        variant: 'destructive',
-      });
-      return;
+  const [fetchedSessions, setFetchedSessions] = useState<TimeSession[]>(sessions);
+  const [isFiltering, setIsFiltering] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!searchQuery && clientFilter === 'all' && !startDate && !endDate) {
+      setFetchedSessions(sessions);
     }
+  }, [sessions]);
 
-    setEditingSession(s);
-    setEditTitle(s.title || 'Sessão de Trabalho');
-    setEditHourlyRate(
-      s.hourly_rate !== null && s.hourly_rate !== undefined ? String(s.hourly_rate) : ''
-    );
-    setEditNotes(s.notes || '');
-    setEditClientId(s.client_id || s.Client?.id || s.client?.id || '');
+  useEffect(() => {
+    const timer = setTimeout(async () => {
+      try {
+        setIsFiltering(true);
+        const params = new URLSearchParams();
+        if (searchQuery.trim()) params.append('search', searchQuery.trim());
+        if (clientFilter && clientFilter !== 'all') params.append('clientId', clientFilter);
+        if (startDate) params.append('startDate', startDate);
+        if (endDate) params.append('endDate', endDate);
 
-    const existingTasks = s.Tasks || s.tasks || [];
-    setEditTasks(
-      existingTasks.map((t) => ({
-        id: t.id,
-        description: t.description,
-        notes: t.notes || '',
-        is_deleted: false,
-      }))
-    );
-    setNewTaskDesc('');
-    setNewTaskNotes('');
-    setShowNewTaskForm(false);
-  };
-
-  const handleAddNewTaskToEdit = () => {
-    if (!newTaskDesc.trim()) {
-      addToast({
-        title: 'Descrição obrigatória',
-        description: 'Digite o título da tarefa antes de adicionar.',
-        variant: 'destructive',
-      });
-      return;
-    }
-
-    setEditTasks((prev) => [
-      ...prev,
-      {
-        description: newTaskDesc.trim(),
-        notes: newTaskNotes.trim() || null,
-        is_deleted: false,
-      },
-    ]);
-    setNewTaskDesc('');
-    setNewTaskNotes('');
-    setShowNewTaskForm(false);
-  };
-
-  const handleRemoveTaskFromEdit = (index: number) => {
-    setEditTasks((prev) => {
-      const target = prev[index];
-      if (target.id) {
-        // Mark for deletion if it exists on database
-        return prev.map((t, idx) => (idx === index ? { ...t, is_deleted: true } : t));
+        const res = await apiFetch(`/api/sessions?${params.toString()}`);
+        if (res.ok) {
+          const data = await res.json();
+          setFetchedSessions(data.sessions || []);
+        }
+      } catch (err) {
+        console.error('Error filtering sessions via API:', err);
+      } finally {
+        setIsFiltering(false);
       }
-      // If newly added, simply remove from list
-      return prev.filter((_, idx) => idx !== index);
-    });
-  };
+    }, 400);
 
-  const handleRestoreTaskInEdit = (index: number) => {
-    setEditTasks((prev) =>
-      prev.map((t, idx) => (idx === index ? { ...t, is_deleted: false } : t))
-    );
-  };
+    return () => clearTimeout(timer);
+  }, [searchQuery, clientFilter, startDate, endDate]);
 
-  const handleSaveEdit = async () => {
-    if (!editingSession || !onUpdateSession) return;
-
-    if (!editTitle.trim()) {
-      addToast({
-        title: 'Título obrigatório',
-        description: 'Informe um título válido para a sessão.',
-        variant: 'destructive',
-      });
-      return;
-    }
-
-    try {
-      setIsSavingEdit(true);
-
-      const parsedRate = editHourlyRate.trim() ? parseFloat(editHourlyRate.replace(',', '.')) : null;
-
-      await onUpdateSession(editingSession.id, {
-        title: editTitle.trim(),
-        hourly_rate: isNaN(parsedRate as number) ? null : parsedRate,
-        notes: editNotes.trim() || null,
-        client_id: editClientId || null,
-        tasks: editTasks,
-      });
-
-      setEditingSession(null);
-    } catch (err) {
-      // Error handled in parent handler
-    } finally {
-      setIsSavingEdit(false);
-    }
-  };
-
-  const filteredSessions = sessions.filter((s) => {
-    if (clientFilter === 'all') return true;
-    const cId = s.client_id || s.Client?.id || s.client?.id;
-    return cId === clientFilter;
-  });
+  const filteredSessions = fetchedSessions;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6 px-3 sm:px-6 py-4 pb-24 max-w-7xl mx-auto animate-in fade-in duration-200">
       <div>
-        <h2 className="text-2xl font-bold tracking-tight text-neutral-900 dark:text-neutral-100">
+        <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-neutral-900 dark:text-neutral-100">
           Histórico de Sessões
         </h2>
-        <p className="text-sm text-neutral-500 dark:text-neutral-400">
+        <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-1">
           Visualize todas as sessões registradas, edite títulos, valores da hora, tarefas e observações (controlado por bloqueio de aprovação).
         </p>
       </div>
 
       <Card className="border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shadow-2xs">
         <CardHeader className="pb-3 border-b border-neutral-100 dark:border-neutral-800">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <CardTitle className="text-base font-bold text-neutral-900 dark:text-neutral-100">
-              Registro Cronológico
-            </CardTitle>
-            <div className="flex items-center gap-2">
-              <ClientFilterAutocomplete
-                clients={clients}
-                selectedClientId={clientFilter}
-                onSelectClient={setClientFilter}
-                allLabel="Todos os Clientes"
-                allValue="all"
-              />
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-sm sm:text-base font-bold text-neutral-900 dark:text-neutral-100">
+                Registro Cronológico
+              </CardTitle>
               <Badge variant="outline" className="text-xs">
                 {filteredSessions.length} de {sessions.length} sessões
               </Badge>
+            </div>
+            
+            <div className="space-y-3 pt-1">
+              <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
+                {/* Search Bar */}
+                <div className="sm:col-span-7 relative">
+                  <Search className="w-4 h-4 absolute left-3 top-2.5 text-neutral-400" />
+                  <Input
+                    type="text"
+                    placeholder="Pesquisar por título, cliente ou observação..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="pl-9 pr-8 text-xs h-9 bg-neutral-50/50 dark:bg-neutral-800/50"
+                  />
+                  {searchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchQuery('')}
+                      className="absolute right-2.5 top-2.5 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                {/* Client Filter */}
+                <div className="sm:col-span-5">
+                  <ClientFilterAutocomplete
+                    clients={clients}
+                    selectedClientId={clientFilter}
+                    onSelectClient={setClientFilter}
+                    allLabel="Todos os Clientes"
+                    allValue="all"
+                  />
+                </div>
+              </div>
+
+              {/* Date Range Picker & Reset */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-neutral-50/70 dark:bg-neutral-850/50 p-3 rounded-xl border border-neutral-200 dark:border-neutral-800">
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 flex-1">
+                  <div className="flex items-center gap-2 flex-1">
+                    <span className="text-2xs font-semibold text-neutral-500 dark:text-neutral-400 shrink-0">De:</span>
+                    <Input
+                      type="date"
+                      value={startDate}
+                      onChange={(e) => setStartDate(e.target.value)}
+                      className="text-2xs h-8 px-2 bg-white dark:bg-neutral-800 flex-1"
+                    />
+                  </div>
+                  <div className="flex items-center gap-2 flex-1">
+                    <span className="text-2xs font-semibold text-neutral-500 dark:text-neutral-400 shrink-0">Até:</span>
+                    <Input
+                      type="date"
+                      value={endDate}
+                      onChange={(e) => setEndDate(e.target.value)}
+                      className="text-2xs h-8 px-2 bg-white dark:bg-neutral-800 flex-1"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between sm:justify-end gap-2 shrink-0">
+                  {isFiltering && (
+                    <span className="text-2xs text-indigo-600 dark:text-indigo-400 animate-pulse font-medium">
+                      Buscando...
+                    </span>
+                  )}
+                  {(searchQuery || clientFilter !== 'all' || startDate || endDate) && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setSearchQuery('');
+                        setClientFilter('all');
+                        setStartDate('');
+                        setEndDate('');
+                      }}
+                      className="h-8 px-3 text-xs text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5 mr-1" />
+                      <span>Limpar Filtros</span>
+                    </Button>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
         </CardHeader>
 
         <CardContent className="p-0">
           {filteredSessions.length === 0 ? (
-            <div className="py-12 text-center text-sm text-neutral-400 dark:text-neutral-500">
+            <div className="py-12 text-center text-xs text-neutral-400 dark:text-neutral-500">
               Nenhuma sessão encontrada para o filtro selecionado.
             </div>
           ) : (
@@ -375,27 +468,27 @@ export function HistoryView({
                       </div>
 
                       {/* Right: Metrics & Actions */}
-                      <div className="flex items-center gap-3 self-end sm:self-center shrink-0">
-                        <div className="text-right">
-                          <div className="text-xs text-neutral-500 dark:text-neutral-400">
+                      <div className="flex flex-col sm:flex-row sm:items-center gap-3 self-stretch sm:self-center justify-between sm:justify-end pt-2 sm:pt-0 border-t sm:border-t-0 border-neutral-100 dark:border-neutral-800">
+                        <div className="text-left sm:text-right">
+                          <div className="text-2xs sm:text-xs text-neutral-500 dark:text-neutral-400">
                             {decimalHours.toFixed(2)}h @ R$ {sessionRate.toFixed(2)}/h
                           </div>
-                          <div className="text-sm font-bold text-neutral-900 dark:text-neutral-100 font-mono">
+                          <div className="text-sm sm:text-base font-bold text-neutral-900 dark:text-neutral-100 font-mono">
                             {formatCurrency(billable)}
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-1.5 flex-wrap justify-end">
                           {/* Resume/Continue button (RF06) */}
                           <Button
                             variant="outline"
                             size="sm"
                             onClick={() => onResumeSession(s.id)}
-                            className="h-8 px-2.5 text-xs gap-1 border-neutral-200 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
+                            className="h-9 sm:h-8 px-3 sm:px-2.5 text-xs gap-1 border-neutral-200 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 cursor-pointer"
                             title="Continuar este trabalho em uma nova sessão"
                           >
-                            <Play className="w-3 h-3 fill-current text-indigo-600 dark:text-indigo-400" />
-                            <span className="hidden sm:inline">Continuar</span>
+                            <Play className="w-3.5 h-3.5 sm:w-3 sm:h-3 fill-current text-indigo-600 dark:text-indigo-400 shrink-0" />
+                            <span>Continuar</span>
                           </Button>
 
                           {/* Edit Session Button */}
@@ -405,21 +498,21 @@ export function HistoryView({
                                 variant="ghost"
                                 size="sm"
                                 disabled
-                                className="h-8 px-2 text-xs gap-1 text-neutral-400 dark:text-neutral-600 cursor-not-allowed opacity-60"
+                                className="h-9 sm:h-8 px-2.5 text-xs gap-1 text-neutral-400 dark:text-neutral-600 cursor-not-allowed opacity-60"
                                 title="Esta sessão foi aprovada no relatório e está bloqueada no banco de dados. Nenhuma alteração é permitida."
                               >
-                                <Lock className="w-3.5 h-3.5 text-neutral-400" />
+                                <Lock className="w-3.5 h-3.5 text-neutral-400 shrink-0" />
                                 <span className="hidden md:inline">Bloqueada</span>
                               </Button>
                             ) : (
                               <Button
                                 variant="outline"
                                 size="sm"
-                                onClick={() => openEditModal(s)}
-                                className="h-8 px-2.5 text-xs gap-1 border-neutral-200 dark:border-neutral-700 hover:bg-indigo-50 dark:hover:bg-indigo-950/30 text-neutral-700 dark:text-neutral-300 hover:text-indigo-600 dark:hover:text-indigo-400 cursor-pointer"
+                                onClick={() => handleEditClick(s)}
+                                className="h-9 sm:h-8 px-2.5 text-xs gap-1 border-neutral-200 dark:border-neutral-700 hover:bg-indigo-50 dark:hover:bg-indigo-950/30 text-neutral-700 dark:text-neutral-300 hover:text-indigo-600 dark:hover:text-indigo-400 cursor-pointer"
                                 title="Editar título, valor da hora, tarefas e observações"
                               >
-                                <Edit3 className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                                <Edit3 className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
                                 <span className="hidden md:inline">Editar</span>
                               </Button>
                             )
@@ -429,11 +522,11 @@ export function HistoryView({
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => onShareSession(s.id)}
-                            className="h-8 w-8 p-0 text-neutral-500 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100 cursor-pointer"
-                            title="Compartilhar esta sessão"
+                            onClick={() => openShareModal(s)}
+                            className="h-9 w-9 sm:h-8 sm:w-8 p-0 text-neutral-500 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100 cursor-pointer"
+                            title="Compartilhar esta sessão com opções de preços e aprovação"
                           >
-                            <Share2 className="w-3.5 h-3.5" />
+                            <Share2 className="w-4 h-4 sm:w-3.5 sm:h-3.5" />
                           </Button>
 
                           {/* Expand tasks */}
@@ -441,7 +534,7 @@ export function HistoryView({
                             variant="ghost"
                             size="sm"
                             onClick={() => toggleExpand(s.id)}
-                            className="h-8 w-8 p-0 text-neutral-500 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100 cursor-pointer"
+                            className="h-9 w-9 sm:h-8 sm:w-8 p-0 text-neutral-500 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100 cursor-pointer"
                             title="Ver anotações e tarefas"
                           >
                             {isExpanded ? (
@@ -457,7 +550,7 @@ export function HistoryView({
                               variant="ghost"
                               size="sm"
                               disabled
-                              className="h-8 w-8 p-0 text-neutral-300 dark:text-neutral-700 cursor-not-allowed opacity-50"
+                              className="h-9 w-9 sm:h-8 sm:w-8 p-0 text-neutral-300 dark:text-neutral-700 cursor-not-allowed opacity-50"
                               title="Sessões aprovadas não podem ser excluídas"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
@@ -467,7 +560,7 @@ export function HistoryView({
                               variant="ghost"
                               size="sm"
                               onClick={() => setDeleteSessionId(s.id)}
-                              className="h-8 w-8 p-0 text-neutral-400 hover:text-red-600 dark:hover:text-red-400 cursor-pointer"
+                              className="h-9 w-9 sm:h-8 sm:w-8 p-0 text-neutral-400 hover:text-red-600 dark:hover:text-red-400 cursor-pointer"
                               title="Excluir sessão"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
@@ -484,11 +577,11 @@ export function HistoryView({
                           <span className="text-2xs font-semibold text-neutral-500 dark:text-neutral-400 uppercase tracking-wider block">
                             Tarefas registradas ({tasks.length}):
                           </span>
-                          {!isLocked && onUpdateSession && (
+                           {!isLocked && onUpdateSession && (
                             <Button
                               variant="ghost"
                               size="sm"
-                              onClick={() => openEditModal(s)}
+                              onClick={() => handleEditClick(s)}
                               className="h-6 px-2 text-2xs gap-1 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 cursor-pointer"
                             >
                               <Edit3 className="w-3 h-3" />
@@ -513,17 +606,31 @@ export function HistoryView({
                                     <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
                                     <span className="leading-relaxed break-words">{t.description}</span>
                                   </div>
-                                  {t.notes && (
-                                    <button
-                                      type="button"
-                                      onClick={() => toggleTaskNote(t.id)}
-                                      className="shrink-0 inline-flex items-center gap-1 text-2xs font-semibold px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 hover:bg-amber-100 dark:hover:bg-amber-900/60 transition-colors cursor-pointer"
-                                      title="Clique para ver a observação desta tarefa"
-                                    >
-                                      <FileText className="w-2.5 h-2.5 text-amber-600 dark:text-amber-400" />
-                                      <span>Observação</span>
-                                    </button>
-                                  )}
+                                  <div className="flex items-center gap-1.5 shrink-0">
+                                    {t.link && (
+                                      <a
+                                        href={t.link}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="inline-flex items-center gap-1 text-2xs font-semibold px-2 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 transition-colors"
+                                        title={`Abrir commit no repositório: ${t.link}`}
+                                      >
+                                        <ExternalLink className="w-2.5 h-2.5 text-indigo-600 dark:text-indigo-400" />
+                                        <span>Commit</span>
+                                      </a>
+                                    )}
+                                    {t.notes && (
+                                      <button
+                                        type="button"
+                                        onClick={() => toggleTaskNote(t.id)}
+                                        className="inline-flex items-center gap-1 text-2xs font-semibold px-2 py-0.5 rounded-full bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 hover:bg-amber-100 dark:hover:bg-amber-900/60 transition-colors cursor-pointer"
+                                        title="Clique para ver a observação desta tarefa"
+                                      >
+                                        <FileText className="w-2.5 h-2.5 text-amber-600 dark:text-amber-400" />
+                                        <span>Observação</span>
+                                      </button>
+                                    )}
+                                  </div>
                                 </div>
                                 {t.notes && expandedTaskNotes[t.id] && (
                                   <div className="mt-1.5 ml-5 p-2 rounded-md bg-amber-50/80 dark:bg-amber-950/40 border border-amber-200/70 dark:border-amber-800/50 text-xs text-amber-950 dark:text-amber-200 whitespace-pre-wrap leading-relaxed">
@@ -553,268 +660,6 @@ export function HistoryView({
           )}
         </CardContent>
       </Card>
-
-      {/* Complete Session Edit Modal */}
-      <Dialog
-        open={Boolean(editingSession)}
-        onOpenChange={(open) => !open && setEditingSession(null)}
-        title="Editar Sessão de Trabalho"
-        description="Edite os dados desta sessão. Ao aprovar um relatório público vinculado, a sessão será permanentemente bloqueada para modificações no banco de dados."
-      >
-        {editingSession && (
-          <div className="space-y-4 pt-2 max-h-[75vh] overflow-y-auto pr-1">
-            {/* Title */}
-            <div className="space-y-1">
-              <label className="text-xs font-semibold text-neutral-700 dark:text-neutral-300">
-                Título da Sessão <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="text"
-                value={editTitle}
-                onChange={(e) => setEditTitle(e.target.value)}
-                placeholder="Ex: Refatoração da API e Correção de Bugs"
-                className="w-full px-3 py-2 text-sm rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-              />
-            </div>
-
-            {/* Hourly Rate & Client */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-neutral-700 dark:text-neutral-300 flex items-center justify-between">
-                  <span>Valor da Hora (R$/h)</span>
-                  <span className="text-2xs font-normal text-neutral-400">Personalizado</span>
-                </label>
-                <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-neutral-400">
-                    R$
-                  </span>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={editHourlyRate}
-                    onChange={(e) => setEditHourlyRate(e.target.value)}
-                    placeholder={`${
-                      editingSession.Client?.hourly_rate ?? hourlyRate
-                    } (padrão)`}
-                    className="w-full pl-8 pr-3 py-2 text-sm rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 font-mono"
-                  />
-                </div>
-                <p className="text-2xs text-neutral-400">
-                  Deixe vazio para usar a taxa do cliente (R$ {editingSession.Client?.hourly_rate ?? hourlyRate}/h).
-                </p>
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-neutral-700 dark:text-neutral-300">
-                  Cliente Vinculado
-                </label>
-                <select
-                  value={editClientId}
-                  onChange={(e) => setEditClientId(e.target.value)}
-                  className="w-full px-3 py-2 text-sm rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                >
-                  <option value="">Nenhum cliente (Geral)</option>
-                  {clients.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name} {c.hourly_rate ? `(R$ ${c.hourly_rate}/h)` : ''}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            {/* Session Notes */}
-            <div className="space-y-1">
-              <label className="text-xs font-semibold text-neutral-700 dark:text-neutral-300 flex items-center justify-between">
-                <span>Observações Gerais da Sessão</span>
-                <span className="text-2xs font-normal text-neutral-400">Opcional</span>
-              </label>
-              <textarea
-                rows={3}
-                value={editNotes}
-                onChange={(e) => setEditNotes(e.target.value)}
-                placeholder="Insira detalhes gerais, contexto, links ou anotações desta sessão de trabalho..."
-                className="w-full px-3 py-2 text-xs rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 resize-y"
-              />
-            </div>
-
-            {/* Tasks Section */}
-            <div className="space-y-2 pt-2 border-t border-neutral-100 dark:border-neutral-800">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-bold text-neutral-800 dark:text-neutral-200">
-                  Tarefas e Anotações da Sessão ({editTasks.filter((t) => !t.is_deleted).length})
-                </label>
-                {!showNewTaskForm && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setShowNewTaskForm(true)}
-                    className="h-7 px-2 text-xs gap-1 border-indigo-200 dark:border-indigo-800 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 cursor-pointer"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Adicionar Tarefa</span>
-                  </Button>
-                )}
-              </div>
-
-              {/* Add New Task Form inside Modal */}
-              {showNewTaskForm && (
-                <div className="p-3 rounded-lg border border-indigo-100 dark:border-indigo-900/60 bg-indigo-50/40 dark:bg-indigo-950/30 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold text-indigo-900 dark:text-indigo-300">
-                      Nova Tarefa
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setShowNewTaskForm(false)}
-                      className="text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 cursor-pointer"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                  <input
-                    type="text"
-                    value={newTaskDesc}
-                    onChange={(e) => setNewTaskDesc(e.target.value)}
-                    placeholder="Descrição da tarefa..."
-                    className="w-full px-3 py-1.5 text-xs rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                  />
-                  <textarea
-                    rows={2}
-                    value={newTaskNotes}
-                    onChange={(e) => setNewTaskNotes(e.target.value)}
-                    placeholder="Observações da tarefa (opcional)..."
-                    className="w-full px-3 py-1.5 text-xs rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 focus:outline-none focus:ring-1 focus:ring-indigo-500 resize-y"
-                  />
-                  <div className="flex justify-end gap-2 pt-1">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setShowNewTaskForm(false)}
-                      className="h-7 px-2 text-xs"
-                    >
-                      Cancelar
-                    </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      onClick={handleAddNewTaskToEdit}
-                      className="h-7 px-3 text-xs bg-indigo-600 hover:bg-indigo-700 text-white gap-1 cursor-pointer"
-                    >
-                      <Check className="w-3 h-3" />
-                      Salvar
-                    </Button>
-                  </div>
-                </div>
-              )}
-
-              {/* Tasks List */}
-              <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
-                {editTasks.filter((t) => !t.is_deleted).length === 0 && !showNewTaskForm ? (
-                  <p className="text-xs text-neutral-400 italic py-2">
-                    Nenhuma tarefa associada a esta sessão. Clique em "Adicionar Tarefa" acima.
-                  </p>
-                ) : (
-                  editTasks.map((t, idx) => {
-                    if (t.is_deleted) {
-                      return (
-                        <div
-                          key={t.id || idx}
-                          className="flex items-center justify-between p-2 rounded-lg bg-red-50/50 dark:bg-red-950/20 border border-red-200/50 dark:border-red-900/40 text-xs text-neutral-400 line-through"
-                        >
-                          <span className="truncate flex-1">{t.description}</span>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleRestoreTaskInEdit(idx)}
-                            className="h-6 px-2 text-2xs text-red-600 dark:text-red-400 no-underline cursor-pointer"
-                          >
-                            Restaurar
-                          </Button>
-                        </div>
-                      );
-                    }
-
-                    return (
-                      <div
-                        key={t.id || idx}
-                        className="p-2.5 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50/50 dark:bg-neutral-850/50 space-y-1.5"
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <input
-                            type="text"
-                            value={t.description}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setEditTasks((prev) =>
-                                prev.map((item, i) => (i === idx ? { ...item, description: val } : item))
-                              );
-                            }}
-                            placeholder="Descrição da tarefa"
-                            className="flex-1 px-2.5 py-1 text-xs rounded border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-medium"
-                          />
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleRemoveTaskFromEdit(idx)}
-                            className="h-7 w-7 p-0 text-neutral-400 hover:text-red-600 dark:hover:text-red-400 shrink-0 cursor-pointer"
-                            title="Remover tarefa"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </Button>
-                        </div>
-
-                        {/* Task Notes */}
-                        <div className="space-y-0.5">
-                          <textarea
-                            rows={1}
-                            value={t.notes || ''}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setEditTasks((prev) =>
-                                prev.map((item, i) => (i === idx ? { ...item, notes: val } : item))
-                              );
-                            }}
-                            placeholder="Observações da tarefa (opcional)..."
-                            className="w-full px-2.5 py-1 text-xs rounded border border-neutral-200 dark:border-neutral-700 bg-white/70 dark:bg-neutral-800/70 text-neutral-700 dark:text-neutral-300 focus:outline-none focus:ring-1 focus:ring-indigo-500 resize-y"
-                          />
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            </div>
-
-            {/* Modal Actions */}
-            <div className="flex justify-end gap-2 pt-3 border-t border-neutral-100 dark:border-neutral-800">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setEditingSession(null)}
-                disabled={isSavingEdit}
-                className="cursor-pointer"
-              >
-                Cancelar
-              </Button>
-              <Button
-                type="button"
-                onClick={handleSaveEdit}
-                disabled={isSavingEdit}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white gap-1.5 cursor-pointer"
-              >
-                <Save className="w-3.5 h-3.5" />
-                <span>{isSavingEdit ? 'Salvando...' : 'Salvar Alterações'}</span>
-              </Button>
-            </div>
-          </div>
-        )}
-      </Dialog>
 
       {/* Delete Session Confirmation Modal */}
       <Dialog
@@ -848,6 +693,264 @@ export function HistoryView({
               Sim, Excluir
             </Button>
           </div>
+        </div>
+      </Dialog>
+
+      {/* Share Session Modal */}
+      <Dialog
+        open={Boolean(sharingSession)}
+        onOpenChange={(open) => !open && setSharingSession(null)}
+        title="Compartilhar Sessão de Trabalho"
+        description="Gere um link seguro com opções de exibição de preços e aprovação para seu cliente."
+      >
+        <div className="space-y-4 pt-2">
+          {!generatedShareToken ? (
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                  Título do Relatório
+                </label>
+                <Input
+                  value={shareTitle}
+                  onChange={(e) => setShareTitle(e.target.value)}
+                  placeholder="Ex: Relatório de Horas - Tarefas Concluídas"
+                  className="text-sm"
+                  style={{ color: '#000000' }}
+                />
+              </div>
+
+              {sharingSession && (
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                    Detalhes da Sessão
+                  </label>
+                  <div className="rounded-lg border border-neutral-200 dark:border-neutral-750 bg-neutral-50 dark:bg-neutral-850 p-3 text-xs text-neutral-600 dark:text-neutral-300 space-y-1.5">
+                    <p>
+                      <strong>Cliente:</strong>{' '}
+                      {sharingSession.Client?.name ||
+                        sharingSession.client?.name ||
+                        clients.find((c) => c.id === sharingSession.client_id)?.name ||
+                        'Sem cliente vinculado'}
+                    </p>
+                    <p>
+                      <strong>Período:</strong>{' '}
+                      {formatDateTime(sharingSession.start_time)}
+                    </p>
+                    <p>
+                      <strong>Tarefas:</strong>{' '}
+                      {(sharingSession.Tasks || sharingSession.tasks || []).length} tarefa(s) registrada(s)
+                    </p>
+                    {(() => {
+                      const start = new Date(sharingSession.start_time).getTime();
+                      const end = sharingSession.end_time ? new Date(sharingSession.end_time).getTime() : Date.now();
+                      const durationMs = Math.max(0, end - start);
+                      const rate = sharingSession.hourly_rate ?? (sharingSession.Client?.hourly_rate ?? hourlyRate);
+                      const billable = (durationMs / 3600000) * rate;
+                      return (
+                        <p className="text-emerald-700 dark:text-emerald-400 font-medium">
+                          <strong>Total a Faturar:</strong>{' '}
+                          {includeCost ? formatCurrency(billable) : 'Oculto (preços desativados no link)'}
+                        </p>
+                      );
+                    })()}
+                  </div>
+                </div>
+              )}
+
+              {/* Opções de Compartilhamento Seguro */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                  Opções de Segurança &amp; Exibição
+                </label>
+                <div className="rounded-lg border border-neutral-200 dark:border-neutral-750 bg-neutral-50/70 dark:bg-neutral-850/50 p-3 space-y-3">
+                  {/* Opção: Exibir preços */}
+                  <label className="flex items-start gap-3 cursor-pointer group select-none">
+                    <input
+                      type="checkbox"
+                      id="hist-share-opt-include-cost"
+                      checked={includeCost}
+                      onChange={(e) => setIncludeCost(e.target.checked)}
+                      className="mt-0.5 h-4 w-4 rounded border-neutral-300 dark:border-neutral-600 text-neutral-900 dark:text-neutral-100 focus:ring-neutral-900 cursor-pointer"
+                    />
+                    <div className="space-y-0.5">
+                      <div className="flex items-center gap-1.5 text-xs font-semibold text-neutral-900 dark:text-neutral-100 group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">
+                        <DollarSign className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                        <span>Exibir preços</span>
+                      </div>
+                      <p className="text-2xs text-neutral-500 dark:text-neutral-400 leading-relaxed">
+                        Exibe taxas por hora e valor total faturável. Quando desmarcado, omite com segurança todos os dados financeiros no link.
+                      </p>
+                    </div>
+                  </label>
+
+                  <div className="border-t border-neutral-200 dark:border-neutral-750" />
+
+                  {/* Opção: Aprovação */}
+                  <label className="flex items-start gap-3 cursor-pointer group select-none">
+                    <input
+                      type="checkbox"
+                      id="hist-share-opt-allow-approval"
+                      checked={allowApproval}
+                      onChange={(e) => setAllowApproval(e.target.checked)}
+                      className="mt-0.5 h-4 w-4 rounded border-neutral-300 dark:border-neutral-600 text-neutral-900 dark:text-neutral-100 focus:ring-neutral-900 cursor-pointer"
+                    />
+                    <div className="space-y-0.5">
+                      <div className="flex items-center gap-1.5 text-xs font-semibold text-neutral-900 dark:text-neutral-100 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                        <span>Aprovação</span>
+                      </div>
+                      <p className="text-2xs text-neutral-500 dark:text-neutral-400 leading-relaxed">
+                        Permite que o cliente aprove formalmente o relatório na página pública com assinatura digital e código de aprovação.
+                      </p>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              <div className="pt-2 flex justify-end gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => setSharingSession(null)}
+                  className="text-xs cursor-pointer"
+                >
+                  Cancelar
+                </Button>
+                <Button
+                  onClick={handleCreateShareToken}
+                  disabled={shareLoading || !shareTitle.trim()}
+                  className="text-xs gap-1.5 bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 cursor-pointer"
+                >
+                  <Share2 className="w-3.5 h-3.5" />
+                  <span>{shareLoading ? 'Gerando...' : 'Gerar Link Seguro'}</span>
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="rounded-lg border border-emerald-200 dark:border-emerald-800/60 bg-emerald-50 dark:bg-emerald-950/60 p-3 text-xs text-emerald-900 dark:text-emerald-200 space-y-2">
+                <div className="font-semibold flex items-center gap-1.5 text-emerald-800 dark:text-emerald-300">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                  Link criado com sucesso!
+                </div>
+                <p>
+                  {includeCost
+                    ? 'O cliente poderá visualizar as atividades, horas e precificação desta sessão.'
+                    : 'Modo seguro ativo: Valores monetários foram omitidos da visualização pública.'}
+                </p>
+                <div className="flex flex-wrap gap-2 pt-1 text-2xs font-medium">
+                  <span className={`px-2 py-0.5 rounded-full border ${includeCost ? 'bg-emerald-100 dark:bg-emerald-900/60 border-emerald-300 text-emerald-800 dark:text-emerald-200' : 'bg-neutral-100 dark:bg-neutral-800 border-neutral-300 text-neutral-700 dark:text-neutral-300'}`}>
+                    Preços: {includeCost ? 'Visíveis' : 'Ocultos'}
+                  </span>
+                  <span className={`px-2 py-0.5 rounded-full border ${allowApproval ? 'bg-indigo-100 dark:bg-indigo-900/60 border-indigo-300 text-indigo-800 dark:text-indigo-200' : 'bg-neutral-100 dark:bg-neutral-800 border-neutral-300 text-neutral-700 dark:text-neutral-300'}`}>
+                    Aprovação: {allowApproval ? 'Habilitada' : 'Desabilitada (Somente Leitura)'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                  Link Público Read-Only:
+                </label>
+                <div className="flex gap-2">
+                  <Input
+                    readOnly
+                    value={`${window.location.origin}/shared/${generatedShareToken}`}
+                    className="text-xs font-mono bg-neutral-50 dark:bg-neutral-850"
+                  />
+                  <Button
+                    onClick={copyToClipboard}
+                    className="shrink-0 gap-1 text-xs cursor-pointer"
+                  >
+                    {copied ? (
+                      <>
+                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                        <span style={{ color: '#000000' }}>Copiado!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5" />
+                        <span style={{ color: '#000000' }}>Copiar</span>
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </div>
+
+              {generatedApprovalCode && (
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                    Código de Aprovação (Enviar para o cliente):
+                  </label>
+                  <div className="flex gap-2">
+                    <Input
+                      readOnly
+                      value={generatedApprovalCode}
+                      className="text-xs font-mono font-bold tracking-wider text-indigo-600 dark:text-indigo-400 bg-neutral-50 dark:bg-neutral-850"
+                    />
+                    <Button
+                      onClick={copyApprovalCode}
+                      className="shrink-0 gap-1 text-xs cursor-pointer"
+                    >
+                      {approvalCopied ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-emerald-400" />
+                          <span style={{ color: '#000000' }}>Copiado!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5" />
+                          <span style={{ color: '#000000' }}>Copiar Código</span>
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                  <p className="text-2xs text-neutral-500 dark:text-neutral-400">
+                    O cliente precisará digitar este código na página pública para aprovar ou rejeitar os apontamentos.
+                  </p>
+                </div>
+              )}
+
+              {!allowApproval && (
+                <div className="p-2.5 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-850/60 text-2xs text-neutral-600 dark:text-neutral-400">
+                  <strong>Aprovação desativada:</strong> Este relatório é estritamente informativo (somente leitura). O cliente não verá campos de assinatura e nenhum código é necessário.
+                </div>
+              )}
+
+              <div className="pt-3 flex justify-between items-center">
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    setGeneratedShareToken(null);
+                    setGeneratedApprovalCode(null);
+                  }}
+                  className="text-xs text-neutral-500 dark:text-neutral-400 cursor-pointer"
+                >
+                  Gerar outro link
+                </Button>
+
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      if (generatedShareToken) {
+                        window.open(`/shared/${generatedShareToken}`, '_blank');
+                      }
+                    }}
+                    className="text-xs gap-1.5 cursor-pointer"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    <span>Visualizar como Cliente</span>
+                  </Button>
+                  <Button
+                    onClick={() => setSharingSession(null)}
+                    className="text-xs bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 cursor-pointer"
+                  >
+                    Concluir
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </Dialog>
     </div>
