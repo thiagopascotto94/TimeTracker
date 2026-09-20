@@ -1,7 +1,8 @@
 import { Router, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
-import { User, Tenant, Subscription, PasswordReset } from '../db';
+import { Op } from 'sequelize';
+import { User, Tenant, Subscription, PasswordReset, Client, ClientContact, Workspace, WorkspaceMember, TimeSession } from '../db';
 import { authMiddleware, AuthenticatedRequest } from '../auth';
 import {
   generateAccessToken,
@@ -57,6 +58,7 @@ authRouter.post('/login', async (req, res) => {
     }
 
     const tenant = await Tenant.findByPk(user.tenant_id);
+    const linkedClients = await getLinkedClientsForEmail(user.email);
 
     return res.json({
       token,
@@ -74,6 +76,8 @@ authRouter.post('/login', async (req, res) => {
         name: tenant.name,
         plan_id: tenant.plan_id || 'free',
       } : null,
+      has_linked_clients: linkedClients.length > 0,
+      linked_clients_count: linkedClients.length,
     });
   } catch (err: any) {
     console.error('Login error:', err);
@@ -146,6 +150,8 @@ authRouter.post('/register', async (req, res) => {
       req.session.tenantId = tenant.id;
     }
 
+    const linkedClients = await getLinkedClientsForEmail(cleanEmail);
+
     res.status(201).json({
       token,
       refreshToken,
@@ -170,6 +176,8 @@ authRouter.post('/register', async (req, res) => {
         gitlab_project: tenant.gitlab_project,
         gitlab_token: tenant.gitlab_token,
       },
+      has_linked_clients: linkedClients.length > 0,
+      linked_clients_count: linkedClients.length,
     });
   } catch (err: any) {
     console.error('Register error:', err);
@@ -545,5 +553,194 @@ authRouter.post('/logout', async (req, res) => {
     });
   } else {
     res.json({ message: 'Sessão encerrada' });
+  }
+});
+
+/**
+ * Helper to fetch all clients linked to a given email across all workspaces.
+ */
+export async function getLinkedClientsForEmail(email: string) {
+  const cleanEmail = (email || '').toLowerCase().trim();
+  if (!cleanEmail) return [];
+
+  // 1. Direct clients where email matches
+  const directClients = await Client.findAll({
+    where: {
+      email: { [Op.like]: cleanEmail },
+    },
+  });
+
+  // 2. Client contacts where email matches
+  const matchedContacts = await ClientContact.findAll({
+    where: {
+      email: { [Op.like]: cleanEmail },
+    },
+    include: [{ model: Client, as: 'Client' }],
+  });
+
+  const linksMap = new Map<string, any>();
+
+  for (const client of directClients) {
+    const key = `client-${client.id}`;
+    linksMap.set(key, {
+      id: key,
+      client,
+      matched_as: 'client' as const,
+      contact: null,
+    });
+  }
+
+  for (const contact of matchedContacts) {
+    if (contact.Client) {
+      const key = `contact-${contact.id}`;
+      linksMap.set(key, {
+        id: key,
+        client: contact.Client,
+        matched_as: 'contact' as const,
+        contact: {
+          id: contact.id,
+          name: contact.name,
+          email: contact.email,
+          role: contact.role,
+          phone: contact.phone,
+        },
+      });
+    }
+  }
+
+  const results = [];
+
+  for (const item of Array.from(linksMap.values())) {
+    const client = item.client;
+
+    // Resolve workspace
+    let workspace: Workspace | null = null;
+    if (client.workspace_id) {
+      workspace = await Workspace.findByPk(client.workspace_id);
+    }
+    if (!workspace) {
+      workspace = await Workspace.findOne({ where: { tenant_id: client.tenant_id } });
+    }
+
+    // Resolve tenant
+    const tenant = await Tenant.findByPk(client.tenant_id);
+
+    // Resolve workspace owner
+    let ownerMember: WorkspaceMember | null = null;
+    if (workspace) {
+      ownerMember = await WorkspaceMember.findOne({
+        where: { workspace_id: workspace.id, role: 'owner' },
+        include: [{ model: User, as: 'User' }],
+      });
+
+      if (!ownerMember || !(ownerMember as any).User) {
+        ownerMember = await WorkspaceMember.findOne({
+          where: { workspace_id: workspace.id, role: 'admin' },
+          include: [{ model: User, as: 'User' }],
+        });
+      }
+    }
+
+    let ownerUser: User | null = (ownerMember as any)?.User || null;
+    if (!ownerUser) {
+      ownerUser = await User.findOne({
+        where: { tenant_id: client.tenant_id, role: 'admin' },
+      });
+    }
+    if (!ownerUser) {
+      ownerUser = await User.findOne({
+        where: { tenant_id: client.tenant_id },
+        order: [['created_at', 'ASC']],
+      });
+    }
+
+    // Sessions stats for this client
+    const allSessions = await TimeSession.findAll({
+      where: { client_id: client.id },
+      order: [['start_time', 'DESC']],
+    });
+
+    let totalSeconds = 0;
+    for (const s of allSessions) {
+      if (s.start_time && s.end_time) {
+        const diff = Math.floor((new Date(s.end_time).getTime() - new Date(s.start_time).getTime()) / 1000);
+        if (diff > 0) totalSeconds += diff;
+      }
+    }
+
+    const hoursInt = Math.floor(totalSeconds / 3600);
+    const minsInt = Math.floor((totalSeconds % 3600) / 60);
+    const total_hours_formatted = hoursInt > 0 ? `${hoursInt}h ${minsInt}m` : `${minsInt}m`;
+
+    const recent_sessions = allSessions.slice(0, 10).map((s) => {
+      let durSec = 0;
+      if (s.start_time && s.end_time) {
+        durSec = Math.max(0, Math.floor((new Date(s.end_time).getTime() - new Date(s.start_time).getTime()) / 1000));
+      }
+      const h = Math.floor(durSec / 3600);
+      const m = Math.floor((durSec % 3600) / 60);
+      return {
+        id: s.id,
+        title: s.title || 'Sessão sem título',
+        start_time: s.start_time ? new Date(s.start_time).toISOString() : '',
+        end_time: s.end_time ? new Date(s.end_time).toISOString() : null,
+        duration_seconds: durSec,
+        duration_formatted: h > 0 ? `${h}h ${m}m` : `${m}m`,
+      };
+    });
+
+    results.push({
+      id: item.id,
+      matched_as: item.matched_as,
+      contact: item.contact,
+      client: {
+        id: client.id,
+        name: client.name,
+        company: client.company,
+        email: client.email,
+        notes: client.notes,
+        created_at: client.created_at,
+      },
+      workspace: {
+        id: workspace ? workspace.id : client.tenant_id,
+        name: workspace ? workspace.name : (tenant ? tenant.name : 'Workspace Padrão'),
+        description: workspace ? workspace.description : null,
+      },
+      tenant: {
+        id: tenant ? tenant.id : client.tenant_id,
+        name: tenant ? tenant.name : 'Organização',
+      },
+      owner: {
+        id: ownerUser ? ownerUser.id : '',
+        name: ownerUser ? ownerUser.name : 'Administrador do Workspace',
+        email: ownerUser ? ownerUser.email : '',
+        role: ownerMember?.role === 'owner' ? 'Proprietário' : (ownerUser?.role === 'admin' ? 'Administrador' : 'Gestor'),
+      },
+      stats: {
+        total_sessions: allSessions.length,
+        total_seconds: totalSeconds,
+        total_hours_formatted,
+        recent_sessions,
+      },
+    });
+  }
+
+  return results;
+}
+
+// GET /api/auth/linked-clients
+authRouter.get('/linked-clients', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const user = req.user!;
+    const results = await getLinkedClientsForEmail(user.email);
+
+    return res.json({
+      user_email: user.email,
+      linked_clients_count: results.length,
+      linked_clients: results,
+    });
+  } catch (err: any) {
+    console.error('Error fetching linked clients:', err);
+    return res.status(500).json({ error: 'Erro ao buscar vínculos de clientes' });
   }
 });

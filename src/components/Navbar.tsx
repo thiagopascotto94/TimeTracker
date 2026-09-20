@@ -14,6 +14,7 @@ import {
   ChevronRight,
   ShieldCheck,
   Sparkles,
+  UserCheck,
 } from 'lucide-react';
 import { User, Tenant, TimeSession } from '../types';
 import { formatCurrency } from '../utils/format';
@@ -22,14 +23,16 @@ import { Button } from './ui/button';
 import { WorkspaceSelector } from './WorkspaceSelector';
 
 interface NavbarProps {
-  activeTab: 'timer' | 'reports' | 'history' | 'clients' | 'settings' | 'assistant';
-  setActiveTab: (tab: 'timer' | 'reports' | 'history' | 'clients' | 'settings' | 'assistant') => void;
+  activeTab: 'timer' | 'reports' | 'history' | 'clients' | 'settings' | 'assistant' | 'linked-clients';
+  setActiveTab: (tab: 'timer' | 'reports' | 'history' | 'clients' | 'settings' | 'assistant' | 'linked-clients') => void;
   user: User | null;
   tenant: Tenant | null;
   activeSession: TimeSession | null;
   onOpenAuth: () => void;
   theme: 'light' | 'dark';
   onToggleTheme: () => void;
+  onWorkspaceChange?: () => void;
+  linkedClientsCount?: number;
 }
 
 export function Navbar({
@@ -41,10 +44,12 @@ export function Navbar({
   onOpenAuth,
   theme,
   onToggleTheme,
+  onWorkspaceChange,
+  linkedClientsCount = 0,
 }: NavbarProps) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  const handleTabSelect = (tab: 'timer' | 'reports' | 'history' | 'clients' | 'settings' | 'assistant') => {
+  const handleTabSelect = (tab: 'timer' | 'reports' | 'history' | 'clients' | 'settings' | 'assistant' | 'linked-clients') => {
     setActiveTab(tab);
     setMobileMenuOpen(false);
   };
@@ -52,7 +57,7 @@ export function Navbar({
   return (
     <>
       {/* Top Header */}
-      <header className="sticky top-0 z-40 w-full border-b border-neutral-200 dark:border-neutral-800 bg-white/95 dark:bg-neutral-900/95 backdrop-blur-xs transition-colors">
+      <header className="sticky top-0 z-40 w-full shrink-0 border-b border-neutral-200 dark:border-neutral-800 bg-white/95 dark:bg-neutral-900/95 backdrop-blur-xs transition-colors">
         <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-3 sm:px-6 lg:px-8">
           {/* Brand & Workspace Selector */}
           <div className="flex items-center gap-3 sm:gap-4 min-w-0">
@@ -67,10 +72,12 @@ export function Navbar({
               </div>
             </div>
 
-            <div className="h-5 w-px bg-neutral-200 dark:bg-neutral-800 hidden sm:block" />
+            <div className="h-5 w-px bg-neutral-200 dark:bg-neutral-800 hidden md:block" />
 
-            {/* Workspace Selector Dropdown */}
-            <WorkspaceSelector />
+            {/* Workspace Selector Dropdown (Desktop only in header) */}
+            <div className="hidden md:block">
+              <WorkspaceSelector onWorkspaceChange={onWorkspaceChange} />
+            </div>
           </div>
 
           {/* Desktop Navigation Tabs */}
@@ -124,6 +131,18 @@ export function Navbar({
             >
               <Briefcase className="h-4 w-4" />
               <span>Clientes</span>
+            </button>
+
+            <button
+              onClick={() => handleTabSelect('assistant')}
+              className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors cursor-pointer ${
+                activeTab === 'assistant'
+                  ? 'bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 shadow-2xs font-semibold border border-indigo-200/80 dark:border-indigo-800/80'
+                  : 'text-neutral-600 dark:text-neutral-400 hover:bg-neutral-50 dark:hover:bg-neutral-800/60 hover:text-neutral-900 dark:hover:text-neutral-100'
+              }`}
+            >
+              <Sparkles className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
+              <span>Cronos AI</span>
             </button>
           </nav>
 
@@ -230,6 +249,21 @@ export function Navbar({
               </Button>
             </div>
 
+            {/* Workspace Selector in Mobile Menu */}
+            <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-850 p-3 space-y-2">
+              <label className="text-2xs font-bold text-neutral-500 dark:text-neutral-400 uppercase tracking-wider">
+                Workspace Atual &amp; Gerenciamento
+              </label>
+              <div className="[&>div]:w-full [&_button]:w-full [&_button]:justify-between">
+                <WorkspaceSelector
+                  onWorkspaceChange={() => {
+                    setMobileMenuOpen(false);
+                    if (onWorkspaceChange) onWorkspaceChange();
+                  }}
+                />
+              </div>
+            </div>
+
             {/* Mobile Navigation Links (touch targets >= 44px) */}
             <div className="space-y-1">
               <button
@@ -297,6 +331,40 @@ export function Navbar({
                 </div>
                 <ChevronRight className="h-4 w-4 text-neutral-400" />
               </button>
+
+              <button
+                onClick={() => handleTabSelect('assistant')}
+                className={`w-full min-h-[44px] flex items-center justify-between rounded-lg px-3.5 py-2.5 text-sm font-medium transition-colors cursor-pointer ${
+                  activeTab === 'assistant'
+                    ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-900 dark:text-indigo-200 font-semibold border border-indigo-200 dark:border-indigo-800'
+                    : 'text-neutral-700 dark:text-neutral-300 hover:bg-neutral-50 dark:hover:bg-neutral-850'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <Sparkles className="h-5 w-5 text-indigo-600 dark:text-indigo-400" />
+                  <span>Cronos AI (Chat)</span>
+                </div>
+                <ChevronRight className="h-4 w-4 text-neutral-400" />
+              </button>
+
+              {linkedClientsCount > 0 && (
+                <button
+                  onClick={() => handleTabSelect('linked-clients')}
+                  className={`w-full min-h-[44px] flex items-center justify-between rounded-lg px-3.5 py-2.5 text-sm font-medium transition-colors cursor-pointer ${
+                    activeTab === 'linked-clients'
+                      ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-900 dark:text-emerald-100 font-semibold border border-emerald-200 dark:border-emerald-800'
+                      : 'text-neutral-700 dark:text-neutral-300 hover:bg-neutral-50 dark:hover:bg-neutral-850'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <UserCheck className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+                    <span>Vínculos como Cliente</span>
+                  </div>
+                  <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-emerald-600 text-white text-[10px] font-bold px-1.5 shadow-2xs">
+                    {linkedClientsCount}
+                  </span>
+                </button>
+              )}
             </div>
 
             {/* Quick theme switcher row in mobile menu */}

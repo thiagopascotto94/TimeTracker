@@ -13,7 +13,7 @@ interface AuthModalProps {
   currentUser: User | null;
   currentTenant: Tenant | null;
   activeSession?: TimeSession | null;
-  onLoginSuccess: (user: User, tenant: Tenant) => void;
+  onLoginSuccess: (user: User, tenant: Tenant, hasLinkedClients?: boolean) => void;
   onLogoutSuccess: () => void;
 }
 
@@ -55,7 +55,7 @@ export function AuthModal({
       if (data.token) {
         localStorage.setItem('jwt_token', data.token);
       }
-      onLoginSuccess(data.user, data.tenant);
+      onLoginSuccess(data.user, data.tenant, Boolean(data.has_linked_clients));
       onOpenChange(false);
       setConfirmLogoutActive(false);
       addToast({
@@ -99,14 +99,22 @@ export function AuthModal({
       if (data.token) {
         localStorage.setItem('jwt_token', data.token);
       }
-      onLoginSuccess(data.user, data.tenant);
+      onLoginSuccess(data.user, data.tenant, Boolean(data.has_linked_clients));
       onOpenChange(false);
       setConfirmLogoutActive(false);
-      addToast({
-        title: 'Conta criada!',
-        description: `Novo workspace isolado ${data.tenant.name} criado.`,
-        variant: 'success',
-      });
+      if (data.has_linked_clients) {
+        addToast({
+          title: 'Vínculos de cliente localizados!',
+          description: `Seu e-mail está associado a clientes em outros workspaces. A aba de vínculos foi disponibilizada.`,
+          variant: 'default',
+        });
+      } else {
+        addToast({
+          title: 'Conta criada!',
+          description: `Novo workspace isolado ${data.tenant.name} criado.`,
+          variant: 'success',
+        });
+      }
     } catch (err: any) {
       addToast({
         title: 'Erro no cadastro',

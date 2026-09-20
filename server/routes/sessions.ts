@@ -19,6 +19,14 @@ sessionsRouter.get('/active', async (req: AuthenticatedRequest, res: Response) =
         tenant_id: req.tenantId!,
         user_id: req.userId!,
         end_time: null,
+        ...(req.workspaceId
+          ? {
+              [Op.or]: [
+                { workspace_id: req.workspaceId },
+                { workspace_id: null },
+              ],
+            }
+          : {}),
       },
       include: [
         {
@@ -51,6 +59,14 @@ sessionsRouter.get('/', async (req: AuthenticatedRequest, res: Response) => {
     const where: any = {
       tenant_id: req.tenantId!,
       user_id: req.userId!,
+      ...(req.workspaceId
+        ? {
+            [Op.or]: [
+              { workspace_id: req.workspaceId },
+              { workspace_id: null },
+            ],
+          }
+        : {}),
     };
 
     if (clientId && clientId !== 'all') {
@@ -121,6 +137,14 @@ sessionsRouter.post('/start', checkPlanLimit('sessions'), async (req: Authentica
         tenant_id: req.tenantId!,
         user_id: req.userId!,
         end_time: null,
+        ...(req.workspaceId
+          ? {
+              [Op.or]: [
+                { workspace_id: req.workspaceId },
+                { workspace_id: null },
+              ],
+            }
+          : {}),
       },
     });
 
@@ -138,6 +162,14 @@ sessionsRouter.post('/start', checkPlanLimit('sessions'), async (req: Authentica
         where: {
           id: previous_session_id,
           tenant_id: req.tenantId!,
+          ...(req.workspaceId
+            ? {
+                [Op.or]: [
+                  { workspace_id: req.workspaceId },
+                  { workspace_id: null },
+                ],
+              }
+            : {}),
         },
       });
     }
@@ -147,6 +179,7 @@ sessionsRouter.post('/start', checkPlanLimit('sessions'), async (req: Authentica
 
     const newSession = await TimeSession.create({
       tenant_id: req.tenantId!,
+      workspace_id: req.workspaceId || null,
       user_id: req.userId!,
       client_id: client_id || (prevSession ? prevSession.client_id : null),
       title: title?.trim() || (prevSession ? `Continuação: ${prevSession.title}` : 'Sessão de Foco'),

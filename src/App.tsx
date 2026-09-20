@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Lock, LogIn, Sparkles } from 'lucide-react';
-import { User, Tenant, TimeSession, TaskItem, Client, GitRepositoryItem } from './types';
+import { Lock, LogIn, Sparkles, UserCheck, ArrowRight } from 'lucide-react';
+import { User, Tenant, TimeSession, TaskItem, Client, GitRepositoryItem, LinkedClientItem } from './types';
 import { ToastProvider, useToast } from './components/ui/toast';
 import { Button } from './components/ui/button';
 import { Navbar } from './components/Navbar';
@@ -17,11 +17,12 @@ import { LoginView } from './components/LoginView';
 import { InviteAcceptView } from './components/InviteAcceptView';
 import { AiAssistantView } from './components/AiAssistantView';
 import { SessionEditView } from './components/SessionEditView';
+import { LinkedClientsView } from './components/LinkedClientsView';
 import { formatCurrency, formatDurationHuman } from './utils/format';
 import { apiFetch } from './utils/api';
 
-export type TabType = 'timer' | 'reports' | 'history' | 'clients' | 'client-new' | 'client-edit' | 'client-contacts' | 'session-edit' | 'settings' | 'assistant';
-const VALID_TABS: readonly TabType[] = ['timer', 'reports', 'history', 'clients', 'client-new', 'client-edit', 'client-contacts', 'session-edit', 'settings', 'assistant'] as const;
+export type TabType = 'timer' | 'reports' | 'history' | 'clients' | 'client-new' | 'client-edit' | 'client-contacts' | 'session-edit' | 'settings' | 'assistant' | 'linked-clients';
+const VALID_TABS: readonly TabType[] = ['timer', 'reports', 'history', 'clients', 'client-new', 'client-edit', 'client-contacts', 'session-edit', 'settings', 'assistant', 'linked-clients'] as const;
 
 function getTabFromUrl(): { tab: TabType; clientId?: string; sessionId?: string; reportsSubTab?: 'overview' | 'shared-links' } {
   if (typeof window === 'undefined') return { tab: 'timer' };
@@ -33,6 +34,9 @@ function getTabFromUrl(): { tab: TabType; clientId?: string; sessionId?: string;
   }
   if (path === 'clients/new' || path === 'client/new') {
     return { tab: 'client-new' };
+  }
+  if (path === 'linked-clients' || path === 'vinculos' || path === 'meus-vinculos') {
+    return { tab: 'linked-clients' };
   }
   const editMatch = path.match(/^clients\/edit\/([a-zA-Z0-9_-]+)$/) || path.match(/^client\/([a-zA-Z0-9_-]+)\/edit$/);
   if (editMatch && editMatch[1]) {
@@ -188,6 +192,8 @@ function AppContent() {
   const [sessions, setSessions] = useState<TimeSession[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [resumeSession, setResumeSession] = useState<TimeSession | null>(null);
+  const [linkedClients, setLinkedClients] = useState<LinkedClientItem[]>([]);
+  const [loadingLinkedClients, setLoadingLinkedClients] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
   const [authModalOpen, setAuthModalOpen] = useState<boolean>(false);
 
@@ -310,6 +316,31 @@ function AppContent() {
     }
   }, []);
 
+  // Fetch Linked Clients (clients matching user's email across any workspace)
+  const fetchLinkedClients = useCallback(async (autoSwitchIfFound = false) => {
+    try {
+      setLoadingLinkedClients(true);
+      const res = await apiFetch('/api/auth/linked-clients');
+      if (res.ok) {
+        const data = await res.json();
+        const list: LinkedClientItem[] = data.linked_clients || [];
+        setLinkedClients(list);
+        if (list.length > 0 && autoSwitchIfFound) {
+          setActiveTab('linked-clients');
+          addToast({
+            title: 'Vínculos de Cliente Ativos',
+            description: `Seu e-mail está associado a ${list.length} cliente(s) no sistema. Uma área de visualização dedicada foi aberta.`,
+            variant: 'default',
+          });
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching linked clients:', err);
+    } finally {
+      setLoadingLinkedClients(false);
+    }
+  }, [setActiveTab, addToast]);
+
   // Initial Load: check authentication
   useEffect(() => {
     async function init() {
@@ -326,8 +357,29 @@ function AppContent() {
       fetchActiveSession();
       fetchSessions();
       fetchClients();
+      fetchLinkedClients(false);
     }
-  }, [user, fetchActiveSession, fetchSessions, fetchClients]);
+  }, [user, fetchActiveSession, fetchSessions, fetchClients, fetchLinkedClients]);
+
+  // Handler for workspace changes
+  const handleWorkspaceChange = useCallback(async () => {
+    if (user) {
+      await Promise.all([
+        fetchActiveSession(),
+        fetchSessions(),
+        fetchClients(),
+        fetchLinkedClients(false),
+      ]);
+    }
+  }, [user, fetchActiveSession, fetchSessions, fetchClients, fetchLinkedClients]);
+
+  useEffect(() => {
+    const handleWsEvent = () => {
+      handleWorkspaceChange();
+    };
+    window.addEventListener('workspace-changed', handleWsEvent);
+    return () => window.removeEventListener('workspace-changed', handleWsEvent);
+  }, [handleWorkspaceChange]);
 
   // Handler: Start Session (RF03)
   const handleStartSession = async (data: {
@@ -814,9 +866,14 @@ function AppContent() {
   if (!user) {
     return (
       <LoginView
-        onLoginSuccess={(loggedInUser, loggedInTenant) => {
+        onLoginSuccess={(loggedInUser, loggedInTenant, hasLinkedClients) => {
           setUser(loggedInUser);
           setTenant(loggedInTenant);
+          if (hasLinkedClients) {
+            fetchLinkedClients(true);
+          } else {
+            fetchLinkedClients(false);
+          }
         }}
       />
     );
@@ -825,7 +882,11 @@ function AppContent() {
   const hourlyRate = user.default_hourly_rate || 150.0;
 
   return (
-    <div className="min-h-screen bg-neutral-50 dark:bg-neutral-950 text-neutral-900 dark:text-neutral-100 flex flex-col font-sans transition-colors">
+    <div className={`bg-neutral-50 dark:bg-neutral-950 text-neutral-900 dark:text-neutral-100 flex flex-col font-sans transition-colors ${
+      activeTab === 'assistant'
+        ? 'h-[100dvh] max-h-[100dvh] overflow-hidden'
+        : 'min-h-screen overflow-x-hidden'
+    }`}>
       {/* Top Navigation */}
       <Navbar
         activeTab={activeTab.startsWith('client-') ? 'clients' : activeTab as any}
@@ -836,11 +897,21 @@ function AppContent() {
         onOpenAuth={() => setAuthModalOpen(true)}
         theme={theme}
         onToggleTheme={toggleTheme}
+        onWorkspaceChange={handleWorkspaceChange}
       />
 
       {/* Main Container */}
-      <main className={`flex-1 max-w-7xl w-full mx-auto px-2 sm:px-6 lg:px-8 ${activeTab === 'assistant' ? 'py-2 sm:py-8' : 'py-8'} flex flex-col items-center justify-center`}>
-        <div className="w-full space-y-6">
+      <main className={`w-full flex flex-col ${
+        activeTab === 'assistant'
+          ? 'flex-1 min-h-0 h-full p-0 m-0 max-w-none pb-14 md:pb-0 overflow-hidden'
+          : 'flex-1 py-8 max-w-7xl mx-auto px-2 sm:px-4 lg:px-6 items-center justify-center'
+      }`}>
+        <div className={`w-full ${
+          activeTab === 'assistant'
+            ? 'h-full flex-1 min-h-0 flex flex-col overflow-hidden'
+            : 'space-y-6'
+        }`}>
+
             {activeTab === 'timer' && (
               <TimerView
                 activeSession={activeSession}
@@ -945,14 +1016,18 @@ function AppContent() {
               />
             )}
 
-            {activeTab === 'settings' && (
+            {(activeTab === 'settings' || activeTab === 'linked-clients') && (
               <SettingsView
                 user={user}
                 tenant={tenant}
                 clients={clients}
                 onRefreshClients={fetchClients}
+                linkedClients={linkedClients}
+                loadingLinkedClients={loadingLinkedClients}
+                onRefreshLinkedClients={() => fetchLinkedClients(false)}
                 onUpdateProfile={handleUpdateProfile}
                 loading={loading}
+                initialTab={activeTab === 'linked-clients' ? 'linked-clients' : 'profile'}
               />
             )}
 
@@ -988,14 +1063,16 @@ function AppContent() {
         </button>
       )}
 
-      {/* Footer */}
-      <footer className="border-t border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 py-6 text-center text-xs text-neutral-500 dark:text-neutral-400">
-        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-center gap-2">
-          <p>
-            Time Tracking &amp; Faturamento
-          </p>
-        </div>
-      </footer>
+      {/* Footer (hidden on assistant chat tab for fixed Gemini-style layout) */}
+      {activeTab !== 'assistant' && (
+        <footer className="border-t border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 py-6 text-center text-xs text-neutral-500 dark:text-neutral-400">
+          <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-center gap-2">
+            <p>
+              Time Tracking &amp; Faturamento
+            </p>
+          </div>
+        </footer>
+      )}
 
       {/* Auth / Account Switcher Modal */}
       <AuthModal
@@ -1004,17 +1081,25 @@ function AppContent() {
         currentUser={user}
         currentTenant={tenant}
         activeSession={activeSession}
-        onLoginSuccess={(u, t) => {
+        onLoginSuccess={(u, t, hasLinkedClients) => {
           setUser(u);
           setTenant(t);
           fetchActiveSession();
           fetchSessions();
+          fetchClients();
+          if (hasLinkedClients) {
+            fetchLinkedClients(true);
+          } else {
+            fetchLinkedClients(false);
+          }
         }}
         onLogoutSuccess={() => {
           setUser(null);
           setTenant(null);
+          setLinkedClients([]);
           setActiveSession(null);
           setSessions([]);
+          setClients([]);
         }}
       />
     </div>

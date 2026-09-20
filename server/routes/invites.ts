@@ -245,6 +245,14 @@ invitesRouter.post(
       const user = req.user!;
       const tenant = req.tenant!;
 
+      if (tenant.plan_id !== 'team') {
+        return res.status(403).json({
+          error: 'O plano Pro é de uso estritamente individual e não aceita membros. Faça upgrade para o plano Team (R$ 9,90/usuário/mês) para convidar colaboradores para o seu workspace.',
+          code: 'FEATURE_REQUIRES_TEAM_PLAN',
+          upgrade_required: true,
+        });
+      }
+
       if (!email || !email.trim()) {
         return res.status(400).json({ error: 'Email do destinatário é obrigatório' });
       }

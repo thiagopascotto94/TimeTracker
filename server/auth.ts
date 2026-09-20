@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { User, Tenant, Workspace, WorkspaceMember } from './db';
 import { verifyToken } from './jwt';
+import { getTenantWorkspaceLockInfo } from './workspace-limits';
 
 // Extend Express Session
 declare module 'express-session' {
@@ -80,11 +81,42 @@ export async function authMiddleware(
     req.userId = user.id;
     req.tenantId = tenant.id;
 
+    // Resolve Workspace Lock Info for Tenant
+    const lockInfo = await getTenantWorkspaceLockInfo(tenant.id);
+
     // Resolve Workspace
     let requestedWorkspaceId =
       (req.headers['x-workspace-id'] as string) ||
       (req.query.workspace_id as string) ||
       req.session?.workspaceId;
+
+    const lockedIds = Array.isArray(lockInfo?.lockedWorkspaceIds) ? lockInfo.lockedWorkspaceIds : [];
+    // Check if the requested workspace is locked under the current plan
+    if (requestedWorkspaceId && lockedIds.includes(requestedWorkspaceId)) {
+      const requestPath = req.originalUrl || req.url || '';
+      const isWorkspaceManagement = requestPath.startsWith('/api/workspaces/') && requestPath !== '/api/workspaces';
+      const isWorkspaceDataRoute =
+        requestPath.startsWith('/api/sessions') ||
+        requestPath.startsWith('/api/clients') ||
+        requestPath.startsWith('/api/reports') ||
+        requestPath.startsWith('/api/ai') ||
+        requestPath.startsWith('/api/git') ||
+        isWorkspaceManagement;
+
+      if (isWorkspaceDataRoute) {
+        return res.status(403).json({
+          error: 'Acesso bloqueado: Este workspace está bloqueado no plano Free. Apenas o primeiro workspace está liberado para acesso e qualquer tipo de edição.',
+          code: 'WORKSPACE_LOCKED',
+          is_locked: true,
+          workspace_id: requestedWorkspaceId,
+          plan_name: lockInfo?.planName || 'Free',
+        });
+      }
+
+      // For non-scoped routes (like /api/workspaces list, /api/auth/*, /api/billing/*),
+      // redirect requestedWorkspaceId to the first unlocked workspace so session stays valid
+      requestedWorkspaceId = lockInfo?.firstUnlockedWorkspaceId || undefined;
+    }
 
     let membership: WorkspaceMember | null = null;
     let workspace: Workspace | null = null;
@@ -98,30 +130,42 @@ export async function authMiddleware(
       }
     }
 
-    // If no valid workspace found via header/query/session, pick the user's first membership or create one
-    if (!workspace) {
-      membership = await WorkspaceMember.findOne({
-        where: { user_id: user.id },
-        include: [{ model: Workspace, as: 'Workspace' }],
-      });
+    // If no valid or unlocked workspace found via header/query/session, pick the first unlocked workspace
+    if (!workspace || lockedIds.includes(workspace.id)) {
+      const firstUnlockedId = lockInfo?.firstUnlockedWorkspaceId;
+      if (firstUnlockedId) {
+        membership = await WorkspaceMember.findOne({
+          where: { workspace_id: firstUnlockedId, user_id: user.id },
+        });
+        if (membership) {
+          workspace = await Workspace.findByPk(firstUnlockedId);
+        }
+      }
 
-      if (membership && membership.Workspace) {
-        workspace = membership.Workspace;
-      } else {
-        // Fallback: create default workspace for tenant if none exists
-        workspace = await Workspace.findOne({ where: { tenant_id: tenant.id } });
-        if (!workspace) {
-          workspace = await Workspace.create({
-            tenant_id: tenant.id,
-            name: `Workspace de ${tenant.name}`,
-            description: 'Workspace padrão',
+      if (!workspace) {
+        membership = await WorkspaceMember.findOne({
+          where: { user_id: user.id },
+          include: [{ model: Workspace, as: 'Workspace' }],
+        });
+
+        if (membership && membership.Workspace) {
+          workspace = membership.Workspace;
+        } else {
+          // Fallback: create default workspace for tenant if none exists
+          workspace = await Workspace.findOne({ where: { tenant_id: tenant.id } });
+          if (!workspace) {
+            workspace = await Workspace.create({
+              tenant_id: tenant.id,
+              name: `Workspace de ${tenant.name}`,
+              description: 'Workspace padrão',
+            });
+          }
+          membership = await WorkspaceMember.create({
+            workspace_id: workspace.id,
+            user_id: user.id,
+            role: 'owner',
           });
         }
-        membership = await WorkspaceMember.create({
-          workspace_id: workspace.id,
-          user_id: user.id,
-          role: 'owner',
-        });
       }
     }
 
@@ -146,9 +190,10 @@ export function requireRole(...allowedRoles: string[]) {
     if (!req.workspaceId || !req.workspaceRole) {
       return res.status(403).json({ error: 'Workspace não selecionado ou sem permissão' });
     }
-    if (!allowedRoles.includes(req.workspaceRole)) {
+    const roles = Array.isArray(allowedRoles) ? allowedRoles : [];
+    if (!roles.includes(req.workspaceRole)) {
       return res.status(403).json({
-        error: `Acesso negado. Esta ação requer o papel: ${allowedRoles.join(' ou ')}`,
+        error: `Acesso negado. Esta ação requer o papel: ${roles.join(' ou ')}`,
       });
     }
     next();

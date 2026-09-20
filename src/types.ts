@@ -83,6 +83,20 @@ export interface WorkspaceMember {
   created_at: string;
 }
 
+export interface WorkspaceItem {
+  id: string;
+  name: string;
+  description?: string | null;
+  role: string;
+  members_count: number;
+  is_active: boolean;
+  order_index?: number;
+  is_locked?: boolean;
+  lock_reason?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface TaskItem {
   id: string;
   tenant_id: string;
@@ -284,6 +298,19 @@ export interface AiChatMessage {
   isPending?: boolean;
 }
 
+export interface WorkspaceAiDailyUsageInfo {
+  workspace_id: string;
+  workspace_name?: string;
+  tenant_id: string;
+  date: string;
+  current: number;
+  max: number;
+  remaining: number;
+  plan_id: string;
+  plan_name: string;
+  is_limit_reached: boolean;
+}
+
 export interface GitCommitItem {
   sha: string;
   shortSha: string;
@@ -329,7 +356,6 @@ export interface Plan {
   max_users: number;
   max_clients: number;
   max_sessions_per_month?: number;
-  max_storage_mb: number;
   features: string[];
   is_active: boolean;
 }
@@ -385,15 +411,77 @@ export interface BillingStatus {
     users: PlanLimitInfo;
     clients: PlanLimitInfo;
     sessions_monthly?: PlanLimitInfo;
-    storage_mb: PlanLimitInfo;
   };
+  team_billing?: {
+    price_per_user_monthly: number;
+    price_per_user_yearly: number;
+    active_users: number;
+    pending_invites: number;
+    total_seats: number;
+    total_monthly: number;
+    total_yearly: number;
+  };
+  can_export_workspace?: boolean;
   can_create_client: boolean;
   can_create_user: boolean;
   can_create_session?: boolean;
-  can_upload_storage: boolean;
   is_stripe_configured: boolean;
   available_plans: Plan[];
 }
 
+export interface LinkedClientSession {
+  id: string;
+  title?: string;
+  start_time: string;
+  end_time?: string | null;
+  duration_seconds: number;
+  duration_formatted: string;
+}
 
+export interface LinkedClientItem {
+  id: string;
+  matched_as: 'client' | 'contact';
+  contact?: {
+    id: string;
+    name: string;
+    email: string;
+    role?: string | null;
+    phone?: string | null;
+  } | null;
+  client: {
+    id: string;
+    name: string;
+    company?: string | null;
+    email?: string | null;
+    notes?: string | null;
+    created_at?: string;
+  };
+  workspace: {
+    id: string;
+    name: string;
+    description?: string | null;
+  };
+  tenant: {
+    id: string;
+    name: string;
+  };
+  owner: {
+    id: string;
+    name: string;
+    email: string;
+    role: string;
+    avatar_url?: string | null;
+  };
+  stats: {
+    total_sessions: number;
+    total_seconds: number;
+    total_hours_formatted: string;
+    recent_sessions: LinkedClientSession[];
+  };
+}
 
+export interface LinkedClientsResponse {
+  user_email: string;
+  linked_clients_count: number;
+  linked_clients: LinkedClientItem[];
+}

@@ -18,6 +18,7 @@ import {
   Layers,
   Search,
   PlusCircle,
+  ArrowDown,
   Play,
   Square,
   Bot,
@@ -31,7 +32,16 @@ import {
   Edit3,
   GitCommit,
 } from 'lucide-react';
-import { User, Tenant, TimeSession, AiChatMessage, AiImageAttachment, AiStep, Client } from '../types';
+import {
+  User,
+  Tenant,
+  TimeSession,
+  AiChatMessage,
+  AiImageAttachment,
+  AiStep,
+  Client,
+  WorkspaceAiDailyUsageInfo,
+} from '../types';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { apiFetch } from '../utils/api';
@@ -86,10 +96,21 @@ export function AiAssistantView({
   const [isDragOver, setIsDragOver] = useState(false);
   const [providerInfo, setProviderInfo] = useState<ProviderInfo | null>(null);
   const [loadingStepText, setLoadingStepText] = useState('Pensando...');
+  const [usage, setUsage] = useState<WorkspaceAiDailyUsageInfo | null>(null);
+  const [plusMenuOpen, setPlusMenuOpen] = useState(false);
+  const [showScrollBottom, setShowScrollBottom] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const handleScroll = () => {
+    if (!scrollContainerRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
+    const isFarFromBottom = scrollHeight - scrollTop - clientHeight > 100;
+    setShowScrollBottom(isFarFromBottom);
+  };
 
   useEffect(() => {
     if (!loading) return;
@@ -146,9 +167,33 @@ export function AiAssistantView({
     }
   };
 
+  // Load workspace daily AI message usage
+  const fetchAiUsage = async () => {
+    try {
+      const res = await apiFetch('/api/ai/usage');
+      if (res.ok) {
+        const data = await res.json();
+        setUsage(data);
+      }
+    } catch (err) {
+      console.error('Error fetching AI workspace usage:', err);
+    }
+  };
+
   useEffect(() => {
     fetchMessages();
     fetchProviderInfo();
+    fetchAiUsage();
+
+    const handleWorkspaceChanged = () => {
+      fetchMessages();
+      fetchAiUsage();
+    };
+
+    window.addEventListener('workspace-changed', handleWorkspaceChanged);
+    return () => {
+      window.removeEventListener('workspace-changed', handleWorkspaceChanged);
+    };
   }, []);
 
   // Clear conversation history
@@ -219,6 +264,18 @@ export function AiAssistantView({
     const textToSend = customPrompt || inputText;
     if ((!textToSend.trim() && attachedImages.length === 0) || loading) return;
 
+    // Check if daily workspace limit is reached
+    if (usage?.is_limit_reached) {
+      const limitMessage: AiChatMessage = {
+        id: `limit-${Date.now()}`,
+        role: 'model',
+        content: `⚠️ **Limite diário de perguntas atingido para este workspace (${usage.current}/${usage.max} hoje no plano ${usage.plan_name}).**\n\nEste limite de ${usage.max} ${usage.max === 1 ? 'pergunta' : 'perguntas/dia'} é compartilhado entre todos os membros deste workspace.\n\nPara continuar enviando perguntas à IA hoje, faça upgrade para o plano **Pro** (25 mensagens/dia) ou **Team** (100 mensagens/dia).`,
+        created_at: new Date().toISOString(),
+      };
+      setMessages((prev) => [...prev, limitMessage]);
+      return;
+    }
+
     const currentImages = [...attachedImages];
     const userMessage: AiChatMessage = {
       id: `temp-${Date.now()}`,
@@ -252,11 +309,31 @@ export function AiAssistantView({
 
       if (!res.ok) {
         const errJson = await res.json().catch(() => ({}));
+        if (errJson.code === 'AI_DAILY_LIMIT_EXCEEDED') {
+          setUsage((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  current: errJson.current ?? prev.max,
+                  max: errJson.max ?? prev.max,
+                  remaining: 0,
+                  is_limit_reached: true,
+                }
+              : null
+          );
+        }
         const errText = errJson.error ? `${errJson.error}${errJson.details ? ': ' + errJson.details : ''}` : 'Falha ao conversar com assistente IA';
         throw new Error(errText);
       }
 
       const data = await res.json();
+
+      // Update workspace usage from response if provided
+      if (data.usage) {
+        setUsage(data.usage);
+      } else {
+        fetchAiUsage();
+      }
 
       const botMessage: AiChatMessage = {
         id: `bot-${Date.now()}`,
@@ -336,17 +413,12 @@ export function AiAssistantView({
       prompt: 'Analise as tarefas e observações da minha sessão ativa e sugira um título executivo apropriado.',
       icon: Edit3,
     },
-    {
-      label: 'Extrair Tarefas de Commits (Git)',
-      prompt: 'Quero extrair e aprovar tarefas a partir de alterações de commits do Git / GitHub para a minha sessão de trabalho.',
-      icon: GitCommit,
-    },
   ];
 
   return (
     <div
       id="ai-assistant-container"
-      className="w-full max-w-5xl mx-auto flex flex-col h-[calc(100vh-4.5rem)] sm:h-[calc(100vh-7.5rem)] min-h-[500px] sm:min-h-[580px] bg-white dark:bg-neutral-900 rounded-2xl border border-neutral-200 dark:border-neutral-800 shadow-sm overflow-hidden"
+      className="relative w-full h-full flex-1 min-h-0 flex flex-col bg-white dark:bg-neutral-900 overflow-hidden"
       onDragOver={(e) => {
         e.preventDefault();
         setIsDragOver(true);
@@ -354,38 +426,43 @@ export function AiAssistantView({
       onDragLeave={() => setIsDragOver(false)}
       onDrop={handleDrop}
     >
-      {/* Header Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-2 px-3 sm:px-5 py-2.5 sm:py-3.5 border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50/80 dark:bg-neutral-900/80 backdrop-blur-xs">
+      {/* Header Bar - Fixed at top */}
+      <div className="shrink-0 flex items-center justify-between gap-3 px-4 sm:px-8 py-3 border-b border-neutral-200/80 dark:border-neutral-800/80 bg-white/95 dark:bg-neutral-900/95 backdrop-blur-md z-20">
         <div className="flex items-center gap-2.5">
-          <div className="flex h-8 w-8 sm:h-9 sm:w-9 items-center justify-center rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-600 text-white shadow-xs">
-            <Sparkles className="h-4 w-4 sm:h-5 sm:w-5" />
+          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-600 text-white shadow-xs shrink-0">
+            <Sparkles className="h-4 w-4" />
           </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-sm sm:text-base font-bold text-neutral-900 dark:text-neutral-100">
-                Cronos AI
-              </h2>
-            </div>
-            <p className="text-[11px] sm:text-xs text-neutral-500 dark:text-neutral-400 line-clamp-1 sm:line-clamp-none">
-              Controle o cronômetro, analise imagens e consulte histórico via linguagem natural
-            </p>
-          </div>
+          <h2 className="text-sm sm:text-base font-bold text-neutral-900 dark:text-neutral-100 tracking-tight">
+            Cronos AI
+          </h2>
         </div>
 
         {/* Actions */}
         <div className="flex items-center gap-2">
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() => setGitModalOpen(true)}
-            className="h-8 gap-1.5 text-xs border-indigo-200 dark:border-indigo-800/70 bg-indigo-50/60 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 cursor-pointer"
-            title="Extrair tarefas de commits do Git ou GitHub com IA"
-          >
-            <GitCommit className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
-            <span className="hidden sm:inline">Importar Commits (Git)</span>
-            <span className="sm:hidden">Git</span>
-          </Button>
+          {/* Workspace AI Daily Usage Badge */}
+          {usage && (
+            <div
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-colors cursor-default ${
+                usage.is_limit_reached
+                  ? 'bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 border-red-200 dark:border-red-900/50'
+                  : 'bg-neutral-100/90 dark:bg-neutral-800/90 text-neutral-700 dark:text-neutral-300 border-neutral-200 dark:border-neutral-700/70'
+              }`}
+              title={`Limite diário de perguntas da IA (${usage.workspace_name || 'Workspace'}): ${usage.current} de ${usage.max} enviadas hoje no plano ${usage.plan_name}. Compartilhado entre todos os participantes deste workspace.`}
+            >
+              <Bot className={`w-3.5 h-3.5 ${usage.is_limit_reached ? 'text-red-500' : 'text-indigo-500'}`} />
+              <span className="font-semibold text-neutral-900 dark:text-neutral-100">
+                {usage.plan_name}:
+              </span>
+              <span className={usage.is_limit_reached ? 'text-red-600 dark:text-red-400 font-bold' : ''}>
+                {Math.min(100, Math.round((usage.current / (usage.max || 1)) * 100))}% usado
+              </span>
+              {usage.is_limit_reached && (
+                <Badge variant="destructive" className="text-[10px] px-1.5 py-0 h-4 uppercase tracking-wider">
+                  Esgotado
+                </Badge>
+              )}
+            </div>
+          )}
 
           {/* Clear Button */}
           {messages.length > 0 && (
@@ -401,40 +478,16 @@ export function AiAssistantView({
         </div>
       </div>
 
-      {/* Active Session Status Banner */}
-      {activeSession ? (
-        <div className="bg-amber-50/80 dark:bg-amber-950/30 border-b border-amber-200/80 dark:border-amber-900/50 px-4 py-2 flex items-center justify-between text-xs text-amber-900 dark:text-amber-200">
-          <div className="flex items-center gap-2 truncate">
-            <span className="flex h-2 w-2 rounded-full bg-amber-500 animate-pulse shrink-0" />
-            <span className="font-semibold">Timer ativo no servidor:</span>
-            <span className="font-medium truncate">{activeSession.title}</span>
-            {activeSession.Client && (
-              <span className="text-amber-700 dark:text-amber-300">
-                • {activeSession.Client.name}
-              </span>
-            )}
-            {activeSession.Tasks && activeSession.Tasks.length > 0 && (
-              <span className="text-neutral-500 dark:text-neutral-400">
-                ({activeSession.Tasks.length} tarefas)
-              </span>
-            )}
-          </div>
-          <button
-            onClick={onNavigateToTimer}
-            className="text-amber-800 dark:text-amber-300 font-semibold underline hover:text-amber-950 shrink-0 ml-2 cursor-pointer"
-          >
-            Ver cronômetro
-          </button>
-        </div>
-      ) : null}
-
-      {/* Messages Scrollable Thread */}
+      {/* Messages Scrollable Thread - Only this area moves, no lateral scroll */}
       <div
         id="ai-messages-scroll-area"
-        className={`flex-1 overflow-y-auto p-3 sm:p-6 space-y-4 sm:space-y-6 transition-colors ${
+        ref={scrollContainerRef}
+        onScroll={handleScroll}
+        className={`flex-1 min-h-0 overflow-y-auto overflow-x-hidden w-full overscroll-contain transition-colors ${
           isDragOver ? 'bg-indigo-50/40 dark:bg-indigo-950/20' : ''
         }`}
       >
+        <div className="max-w-4xl mx-auto w-full px-3 sm:px-6 py-4 sm:py-6 space-y-4 sm:space-y-6">
         {loadingHistory ? (
           <div className="flex flex-col items-center justify-center h-48 space-y-3 text-neutral-400">
             <RefreshCw className="w-6 h-6 animate-spin text-neutral-500" />
@@ -487,7 +540,7 @@ export function AiAssistantView({
             return (
               <div
                 key={msg.id || index}
-                className={`flex gap-3 max-w-3xl ${
+                className={`flex gap-3 max-w-3xl w-full min-w-0 ${
                   isUser ? 'ml-auto flex-row-reverse' : 'mr-auto'
                 }`}
               >
@@ -512,7 +565,7 @@ export function AiAssistantView({
 
                 {/* Message Bubble */}
                 <div
-                  className={`flex flex-col space-y-2 rounded-2xl p-3.5 sm:p-4 text-sm leading-relaxed max-w-[95%] sm:max-w-[85%] ${
+                  className={`flex flex-col space-y-2 rounded-2xl p-3.5 sm:p-4 text-sm leading-relaxed max-w-[95%] sm:max-w-[85%] break-words [overflow-wrap:anywhere] min-w-0 ${
                     isUser
                       ? 'bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 rounded-tr-xs'
                       : 'bg-neutral-50 dark:bg-neutral-800/80 text-neutral-800 dark:text-neutral-200 border border-neutral-200 dark:border-neutral-750 rounded-tl-xs shadow-2xs'
@@ -848,10 +901,51 @@ export function AiAssistantView({
         )}
 
         <div ref={messagesEndRef} />
+        </div>
       </div>
 
-      {/* Input Area Footer */}
-      <div className="p-3 sm:p-4 border-t border-neutral-200 dark:border-neutral-800 bg-neutral-50/50 dark:bg-neutral-900/50">
+      {/* Floating Scroll-to-Bottom Button (Gemini-style) */}
+      {showScrollBottom && (
+        <button
+          onClick={scrollToBottom}
+          className="absolute bottom-24 left-1/2 -translate-x-1/2 z-30 flex h-9 w-9 items-center justify-center rounded-full bg-neutral-900/90 dark:bg-neutral-800/90 hover:bg-neutral-900 dark:hover:bg-neutral-700 text-white shadow-lg border border-neutral-700/50 backdrop-blur-md transition-all hover:scale-105 active:scale-95 cursor-pointer animate-in fade-in"
+          title="Rolar para as mensagens recentes"
+          aria-label="Rolar para o final"
+        >
+          <ArrowDown className="w-4 h-4" />
+        </button>
+      )}
+
+      {/* Input Area Footer - Fixed at bottom */}
+      <div className="shrink-0 w-full border-t border-neutral-200/80 dark:border-neutral-800/80 bg-white/95 dark:bg-neutral-900/95 backdrop-blur-md z-20 px-3 sm:px-6 py-2.5 sm:py-3.5">
+        <div className="max-w-4xl mx-auto w-full">
+          {/* Workspace AI Daily Limit Reached Warning Banner */}
+          {usage?.is_limit_reached && (
+          <div className="mb-3 p-3 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/50 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs text-red-900 dark:text-red-200 animate-in fade-in">
+            <div className="flex items-start sm:items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0 mt-0.5 sm:mt-0" />
+              <div>
+                <span className="font-bold">
+                  Limite diário de perguntas da IA atingido ({usage.current}/{usage.max}):{' '}
+                </span>
+                <span className="text-red-800 dark:text-red-300">
+                  O plano {usage.plan_name} permite até {usage.max} {usage.max === 1 ? 'pergunta' : 'perguntas/dia'} compartilhadas entre todos os membros do workspace.
+                </span>
+              </div>
+            </div>
+            {onNavigateToSettings && (
+              <Button
+                type="button"
+                size="sm"
+                onClick={onNavigateToSettings}
+                className="h-7 text-xs bg-red-600 hover:bg-red-700 text-white font-medium shrink-0 cursor-pointer shadow-xs self-start sm:self-auto"
+              >
+                Fazer Upgrade para {usage.plan_id === 'free' ? 'Pro (50/dia)' : 'Team (1.000/dia)'}
+              </Button>
+            )}
+          </div>
+        )}
+
         {/* Attached Images Preview Strip */}
         {attachedImages.length > 0 && (
           <div className="flex flex-wrap gap-2 mb-3">
@@ -881,7 +975,11 @@ export function AiAssistantView({
         )}
 
         {/* Input Bar */}
-        <div className="flex items-end gap-2 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-xl p-2 shadow-2xs focus-within:ring-2 focus-within:ring-indigo-500/20 focus-within:border-indigo-500 transition-all">
+        <div className={`flex items-end gap-2 bg-neutral-100 dark:bg-neutral-800/90 border rounded-2xl sm:rounded-3xl p-1.5 sm:p-2 shadow-2xs transition-all ${
+          usage?.is_limit_reached
+            ? 'border-red-300 dark:border-red-900/60 bg-red-50/20'
+            : 'border-neutral-200/80 dark:border-neutral-700/80 focus-within:ring-2 focus-within:ring-indigo-500/20 focus-within:border-indigo-500'
+        }`}>
           {/* Hidden File Input */}
           <input
             type="file"
@@ -889,18 +987,49 @@ export function AiAssistantView({
             onChange={handleFileSelect}
             accept="image/*"
             multiple
+            disabled={usage?.is_limit_reached}
             className="hidden"
           />
 
-          {/* Attachment Button */}
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            className="flex h-9 w-9 items-center justify-center rounded-lg text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100 hover:bg-neutral-100 dark:hover:bg-neutral-700 transition-colors cursor-pointer shrink-0"
-            title="Anexar imagem (ou cole com Ctrl+V)"
-          >
-            <ImageIcon className="h-5 w-5" />
-          </button>
+          {/* Plus Selection Menu Container */}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setPlusMenuOpen(!plusMenuOpen)}
+              disabled={usage?.is_limit_reached}
+              className="flex h-9 w-9 items-center justify-center rounded-full text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100 hover:bg-neutral-200 dark:hover:bg-neutral-700 transition-colors cursor-pointer shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Opções (Selecionar imagem, Novo commit)"
+            >
+              <PlusCircle className="h-5 w-5" />
+            </button>
+
+            {plusMenuOpen && (
+              <div className="absolute bottom-full left-0 mb-2 w-48 bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-xl shadow-lg py-1.5 z-50 animate-in fade-in zoom-in-95">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPlusMenuOpen(false);
+                    fileInputRef.current?.click();
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3.5 py-2 text-xs font-medium text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700 transition-colors cursor-pointer text-left"
+                >
+                  <ImageIcon className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
+                  <span>Selecionar Imagem</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPlusMenuOpen(false);
+                    setGitModalOpen(true);
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3.5 py-2 text-xs font-medium text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-700 transition-colors cursor-pointer text-left border-t border-neutral-100 dark:border-neutral-700/50"
+                >
+                  <GitCommit className="h-4 w-4 text-violet-600 dark:text-violet-400" />
+                  <span>Novo Commit</span>
+                </button>
+              </div>
+            )}
+          </div>
 
           {/* Textarea */}
           <textarea
@@ -910,35 +1039,33 @@ export function AiAssistantView({
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
             placeholder={
-              attachedImages.length > 0
+              usage?.is_limit_reached
+                ? `Limite diário atingido (${usage.current}/${usage.max} msgs no plano ${usage.plan_name}). Faça upgrade para continuar.`
+                : attachedImages.length > 0
                 ? 'Instrua a IA sobre a imagem (ex: "Extraia as tarefas e inicie o timer")...'
-                : 'Peça para iniciar o timer, buscar histórico, ou anexe uma imagem de tarefas... (Shift+Enter pula linha)'
+                : 'Pergunte ou peça para iniciar timer, buscar histórico... (Shift+Enter pula linha)'
             }
             rows={1}
-            disabled={loading}
-            className="flex-1 max-h-32 min-h-[36px] bg-transparent text-sm text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 focus:outline-none resize-none py-1.5 leading-relaxed"
+            disabled={loading || usage?.is_limit_reached}
+            className="flex-1 max-h-32 min-h-[36px] bg-transparent text-sm text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 focus:outline-none resize-none py-1.5 px-1 leading-relaxed disabled:opacity-50"
           />
 
           {/* Send Button */}
           <Button
             onClick={() => handleSendMessage()}
-            disabled={(!inputText.trim() && attachedImages.length === 0) || loading}
-            className="h-9 px-3.5 bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 hover:bg-neutral-800 dark:hover:bg-neutral-200 font-semibold text-xs cursor-pointer shadow-xs shrink-0 rounded-lg disabled:opacity-40"
+            disabled={(!inputText.trim() && attachedImages.length === 0) || loading || usage?.is_limit_reached}
+            className="h-9 px-3.5 bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 hover:bg-neutral-800 dark:hover:bg-neutral-200 font-semibold text-xs cursor-pointer shadow-xs shrink-0 rounded-full disabled:opacity-40"
           >
             {loading ? (
               <RefreshCw className="w-4 h-4 animate-spin" />
             ) : (
               <>
-                <Send className="w-4 h-4 mr-1.5" />
+                <Send className="w-3.5 h-3.5 mr-1" />
                 <span>Enviar</span>
               </>
             )}
           </Button>
         </div>
-
-        {/* Drag & Paste helper info */}
-        <div className="flex items-center justify-between mt-2 px-1 text-[11px] text-neutral-400 dark:text-neutral-500">
-          <span>Dica: Cole capturas de tela diretamente com Ctrl+V ou arraste imagens aqui.</span>
         </div>
       </div>
 

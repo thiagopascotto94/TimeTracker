@@ -1,10 +1,12 @@
 import 'dotenv/config';
 import express from 'express';
 import session from 'express-session';
+import { RedisStore } from 'connect-redis';
 import cookieParser from 'cookie-parser';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { initDb } from './server/db';
+import { initRedis } from './server/cache';
 import { authRouter } from './server/routes/auth';
 import { sessionsRouter } from './server/routes/sessions';
 import { tasksRouter } from './server/routes/tasks';
@@ -31,6 +33,25 @@ async function startServer() {
     console.error('Failed to initialize database:', err);
   }
 
+  // Initialize Redis client and Session Store (with graceful MemoryStore fallback)
+  let sessionStore: any;
+  try {
+    const redisClient = await initRedis();
+    if (redisClient) {
+      sessionStore = new RedisStore({
+        client: redisClient,
+        prefix: 'cronos:sess:',
+      });
+      console.log('[Sessions] Using RedisStore for session management.');
+    } else {
+      sessionStore = new session.MemoryStore();
+      console.log('[Sessions] Using MemoryStore fallback for session management.');
+    }
+  } catch (err) {
+    console.warn('[Sessions] RedisStore initialization error, using MemoryStore fallback:', err);
+    sessionStore = new session.MemoryStore();
+  }
+
   // Middlewares (allow up to 25mb for base64 image uploads and capture rawBody for Stripe webhooks)
   app.use(
     express.json({
@@ -44,6 +65,7 @@ async function startServer() {
   app.use(cookieParser());
   app.use(
     session({
+      store: sessionStore,
       secret: process.env.SESSION_SECRET || 'time-tracking-faturamento-secret-key-2026',
       resave: false,
       saveUninitialized: false,

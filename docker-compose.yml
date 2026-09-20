@@ -3,27 +3,71 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: time-tracking-app
+    container_name: cronos-app
     restart: unless-stopped
     ports:
       - "3000:3000"
     environment:
       - NODE_ENV=production
       - PORT=3000
-      - SESSION_SECRET=${SESSION_SECRET:-time-tracking-faturamento-secret-key-2026}
-      - DB_PATH=/app/data/database.sqlite
-      # Descomente e defina se for utilizar a chave de API do Gemini:
-      # - GEMINI_API_KEY=${GEMINI_API_KEY}
-      # - APP_URL=${APP_URL:-http://localhost:3000}
-    volumes:
-      - app-data:/app/data
+      - DB_DIALECT=postgres
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-timetracker}
+      - REDIS_URL=redis://redis:6379
+      - SESSION_SECRET=${SESSION_SECRET:-cronos-production-session-secret-key-2026}
+      - JWT_SECRET=${JWT_SECRET:-cronos-jwt-secret-key-2026}
+      - APP_URL=${APP_URL:-http://localhost:3000}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - KILO_API_KEY=${KILO_API_KEY:-}
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/api/health', (r) => { if (r.statusCode !== 200) process.exit(1); })"]
       interval: 30s
       timeout: 5s
       retries: 3
+      start_period: 15s
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: cronos-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-timetracker}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-timetracker}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
       start_period: 10s
 
+  redis:
+    image: redis:7-alpine
+    container_name: cronos-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
 volumes:
-  app-data:
+  postgres_data:
+    driver: local
+  redis_data:
     driver: local

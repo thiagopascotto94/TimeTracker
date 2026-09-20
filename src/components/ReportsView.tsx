@@ -125,6 +125,15 @@ export function ReportsView({
     fetchReport();
   }, [startDate, endDate, clientId]);
 
+  useEffect(() => {
+    const handleWorkspaceChanged = () => {
+      fetchReport();
+      fetchMonthlyTrend();
+    };
+    window.addEventListener('workspace-changed', handleWorkspaceChanged);
+    return () => window.removeEventListener('workspace-changed', handleWorkspaceChanged);
+  }, [startDate, endDate, clientId]);
+
   // Monthly Trend (Last 6 Months) for Bar Chart
   const [monthlyTrend, setMonthlyTrend] = useState<Array<{ key: string; month: string; billing: number; hours: number; sessionsCount: number }>>([]);
   const [trendLoading, setTrendLoading] = useState<boolean>(true);

@@ -2,10 +2,15 @@ import { Router, Response } from 'express';
 import { GoogleGenAI, Type, FunctionDeclaration } from '@google/genai';
 import { Op } from 'sequelize';
 import crypto from 'crypto';
-import { TimeSession, Task, Client, User, AiMessage, ClientContact, Tenant } from '../db';
+import { TimeSession, Task, Client, User, AiMessage, ClientContact, Tenant, Workspace } from '../db';
 import { authMiddleware, AuthenticatedRequest } from '../auth';
 import { getKiloConfig, getKiloClient, runKiloAgenticChat } from '../kilo';
-import { getTenantBillingStatus } from '../billing';
+import {
+  getTenantBillingStatus,
+  checkAiWorkspaceDailyLimit,
+  getWorkspaceAiDailyUsage,
+  incrementWorkspaceAiDailyUsage,
+} from '../billing';
 
 export const aiRouter = Router();
 
@@ -1805,13 +1810,45 @@ async function executeTool(
   }
 }
 
-// GET /api/ai/messages - Retrieve message thread for user & tenant
+// GET /api/ai/usage - Returns daily AI message usage and limits for the active workspace
+aiRouter.get('/usage', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const tenantId = req.tenantId!;
+    let workspaceId = req.workspaceId;
+    if (!workspaceId) {
+      const ws = await Workspace.findOne({ where: { tenant_id: tenantId } });
+      workspaceId = ws?.id;
+    }
+
+    if (!workspaceId) {
+      return res.status(400).json({ error: 'Nenhum workspace ativo encontrado' });
+    }
+
+    const usage = await getWorkspaceAiDailyUsage(workspaceId, tenantId);
+    const ws = await Workspace.findByPk(workspaceId);
+
+    res.json({
+      ...usage,
+      workspace_name: ws?.name || 'Workspace Principal',
+    });
+  } catch (err: any) {
+    console.error('Error fetching AI workspace daily usage:', err);
+    res.status(500).json({ error: 'Erro ao consultar consumo de IA do workspace' });
+  }
+});
+
+// GET /api/ai/messages - Retrieve message thread for user & tenant (scoped to workspace)
 aiRouter.get('/messages', async (req: AuthenticatedRequest, res: Response) => {
   try {
+    const workspaceFilter = req.workspaceId
+      ? { [Op.or]: [{ workspace_id: req.workspaceId }, { workspace_id: null }] }
+      : {};
+
     const messages = await AiMessage.findAll({
       where: {
         tenant_id: req.tenantId!,
         user_id: req.userId!,
+        ...workspaceFilter,
       },
       order: [['created_at', 'ASC']],
       limit: 100,
@@ -1844,13 +1881,18 @@ aiRouter.get('/messages', async (req: AuthenticatedRequest, res: Response) => {
   }
 });
 
-// DELETE /api/ai/messages - Clear conversation history
+// DELETE /api/ai/messages - Clear conversation history (scoped to workspace)
 aiRouter.delete('/messages', async (req: AuthenticatedRequest, res: Response) => {
   try {
+    const workspaceFilter = req.workspaceId
+      ? { [Op.or]: [{ workspace_id: req.workspaceId }, { workspace_id: null }] }
+      : {};
+
     await AiMessage.destroy({
       where: {
         tenant_id: req.tenantId!,
         user_id: req.userId!,
+        ...workspaceFilter,
       },
     });
 
@@ -1862,7 +1904,7 @@ aiRouter.delete('/messages', async (req: AuthenticatedRequest, res: Response) =>
 });
 
 // POST /api/ai/chat - Multi-turn conversational chat with multimodal input and up to 60-step function calling
-aiRouter.post('/chat', async (req: AuthenticatedRequest, res: Response) => {
+aiRouter.post('/chat', checkAiWorkspaceDailyLimit, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { prompt, images, model: requestedModel, maxSteps: requestedMaxSteps } = req.body;
 
@@ -1872,8 +1914,19 @@ aiRouter.post('/chat', async (req: AuthenticatedRequest, res: Response) => {
 
     const tenantId = req.tenantId!;
     const userId = req.userId!;
+    let workspaceId = req.workspaceId;
+    if (!workspaceId) {
+      const ws = await Workspace.findOne({ where: { tenant_id: tenantId } });
+      workspaceId = ws?.id;
+    }
+
     const user = await User.findByPk(userId);
     const hourlyRate = user?.default_hourly_rate || 150.0;
+
+    // Increment daily AI message usage for the workspace upon accepting message
+    if (workspaceId) {
+      await incrementWorkspaceAiDailyUsage(workspaceId, tenantId);
+    }
 
     // Supported models per system guidelines:
     // 'gemini-3.8-flash' (default, fast, reliable), 'gemini-3.1-flash-lite' (fastest), 'gemini-3.1-pro-preview' (deep reasoning)
@@ -1940,8 +1993,12 @@ Responda sempre em Português do Brasil com tom profissional, prestativo e objet
       }
 
       // Fetch prior messages to provide multi-turn conversation context
+      const workspaceFilter = workspaceId
+        ? { [Op.or]: [{ workspace_id: workspaceId }, { workspace_id: null }] }
+        : {};
+
       const priorDbMessages = await AiMessage.findAll({
-        where: { tenant_id: tenantId, user_id: userId },
+        where: { tenant_id: tenantId, user_id: userId, ...workspaceFilter },
         order: [['created_at', 'ASC']],
         limit: 30,
       });
@@ -1949,6 +2006,7 @@ Responda sempre em Português do Brasil com tom profissional, prestativo e objet
       // Save user message to database
       await AiMessage.create({
         tenant_id: tenantId,
+        workspace_id: workspaceId || null,
         user_id: userId,
         role: 'user',
         content: prompt ? prompt.trim() : '(Imagem enviada para análise)',
@@ -1970,11 +2028,14 @@ Responda sempre em Português do Brasil com tom profissional, prestativo e objet
       // Save model response to database
       await AiMessage.create({
         tenant_id: tenantId,
+        workspace_id: workspaceId || null,
         user_id: userId,
         role: 'model',
         content: kiloResult.finalModelText,
         steps_json: kiloResult.executedSteps.length > 0 ? JSON.stringify(kiloResult.executedSteps) : null,
       });
+
+      const updatedUsage = workspaceId ? await getWorkspaceAiDailyUsage(workspaceId, tenantId) : null;
 
       return res.json({
         reply: kiloResult.finalModelText,
@@ -1984,6 +2045,7 @@ Responda sempre em Português do Brasil com tom profissional, prestativo e objet
         clientsChanged: kiloResult.hasClientsChanged,
         provider: 'kilo',
         model: kiloResult.modelUsed,
+        usage: updatedUsage,
       });
     }
 
@@ -1997,8 +2059,12 @@ Responda sempre em Português do Brasil com tom profissional, prestativo e objet
     const ai = getGenAI();
 
     // Fetch prior messages to provide multi-turn conversation context
+    const workspaceFilter = workspaceId
+      ? { [Op.or]: [{ workspace_id: workspaceId }, { workspace_id: null }] }
+      : {};
+
     const priorDbMessages = await AiMessage.findAll({
-      where: { tenant_id: tenantId, user_id: userId },
+      where: { tenant_id: tenantId, user_id: userId, ...workspaceFilter },
       order: [['created_at', 'ASC']],
       limit: 30,
     });
@@ -2044,6 +2110,7 @@ Responda sempre em Português do Brasil com tom profissional, prestativo e objet
     // Save user message to database
     const savedUserMsg = await AiMessage.create({
       tenant_id: tenantId,
+      workspace_id: workspaceId || null,
       user_id: userId,
       role: 'user',
       content: prompt ? prompt.trim() : '(Imagem enviada para análise)',
@@ -2173,11 +2240,14 @@ Responda sempre em Português do Brasil com tom profissional, prestativo e objet
     // Save model response to database
     await AiMessage.create({
       tenant_id: tenantId,
+      workspace_id: workspaceId || null,
       user_id: userId,
       role: 'model',
       content: finalModelText,
       steps_json: executedSteps.length > 0 ? JSON.stringify(executedSteps) : null,
     });
+
+    const updatedUsage = workspaceId ? await getWorkspaceAiDailyUsage(workspaceId, tenantId) : null;
 
     return res.json({
       reply: finalModelText,
@@ -2185,6 +2255,7 @@ Responda sempre em Português do Brasil com tom profissional, prestativo e objet
       stepCount: stepsCount,
       activeSessionChanged: hasSessionChanged,
       clientsChanged: hasClientsChanged,
+      usage: updatedUsage,
     });
   } catch (err: any) {
     console.error('Error in AI Chat API route:', err);

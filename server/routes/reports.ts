@@ -47,6 +47,14 @@ reportsRouter.get('/', async (req: AuthenticatedRequest, res: Response) => {
     const whereClause: any = {
       tenant_id: req.tenantId!,
       user_id: req.userId!,
+      ...(req.workspaceId
+        ? {
+            [Op.or]: [
+              { workspace_id: req.workspaceId },
+              { workspace_id: null },
+            ],
+          }
+        : {}),
     };
 
     if (sessionId) {
@@ -270,6 +278,14 @@ reportsRouter.get('/goal', async (req: AuthenticatedRequest, res: Response) => {
     const whereClause: any = {
       tenant_id: req.tenantId!,
       user_id: req.userId!,
+      ...(req.workspaceId
+        ? {
+            [Op.or]: [
+              { workspace_id: req.workspaceId },
+              { workspace_id: null },
+            ],
+          }
+        : {}),
       start_time: {
         [Op.gte]: startOfMonth,
         [Op.lte]: endOfMonth,
@@ -371,6 +387,14 @@ reportsRouter.get('/monthly-trend', async (req: AuthenticatedRequest, res: Respo
     const whereClause: any = {
       tenant_id: req.tenantId!,
       user_id: req.userId!,
+      ...(req.workspaceId
+        ? {
+            [Op.or]: [
+              { workspace_id: req.workspaceId },
+              { workspace_id: null },
+            ],
+          }
+        : {}),
     };
     if (clientId) {
       whereClause.client_id = clientId;

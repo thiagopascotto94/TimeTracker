@@ -1,21 +1,103 @@
-import { Sequelize, DataTypes, Model } from 'sequelize';
+import { Sequelize, DataTypes, Model, Dialect } from 'sequelize';
 import path from 'path';
 import fs from 'fs';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 
-// Initialize SQLite database
+// Detect database dialect via DB_DIALECT or DATABASE_URL
+const rawDialect = (process.env.DB_DIALECT || '').toLowerCase();
+const hasPostgresUrl = Boolean(
+  process.env.DATABASE_URL &&
+    (process.env.DATABASE_URL.startsWith('postgres://') || process.env.DATABASE_URL.startsWith('postgresql://'))
+);
+export const isPostgres = rawDialect === 'postgres' || rawDialect === 'postgresql' || hasPostgresUrl;
+export const DB_TYPE: Dialect = isPostgres ? 'postgres' : 'sqlite';
+
 const storagePath = process.env.DB_PATH || path.resolve(process.cwd(), 'database.sqlite');
-const storageDir = path.dirname(storagePath);
-if (!fs.existsSync(storageDir)) {
-  fs.mkdirSync(storageDir, { recursive: true });
+if (!isPostgres) {
+  const storageDir = path.dirname(storagePath);
+  if (!fs.existsSync(storageDir)) {
+    fs.mkdirSync(storageDir, { recursive: true });
+  }
 }
 
-export const sequelize = new Sequelize({
-  dialect: 'sqlite',
-  storage: storagePath,
-  logging: false, // Clean console
-});
+// Safe SQLite DATE parser to handle integer timestamps, numbers, Date objects, and non-standard strings
+// Prevents "TypeError: date.includes is not a function" in Sequelize SQLite dialect
+function safeSqliteDateParse(date: unknown, options?: { timezone?: string }): Date | null {
+  if (date === null || date === undefined) return null;
+  if (typeof date === 'number') {
+    return new Date(date);
+  }
+  if (typeof date === 'string') {
+    if (!date.includes('+') && !date.includes('Z')) {
+      return new Date(date + (options && options.timezone ? options.timezone : '+00:00'));
+    }
+    return new Date(date);
+  }
+  if (date instanceof Date) {
+    return date;
+  }
+  return new Date(String(date));
+}
+
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const sqliteDataTypes = require('sequelize/lib/dialects/sqlite/data-types')(DataTypes);
+  if (sqliteDataTypes && sqliteDataTypes.DATE) {
+    sqliteDataTypes.DATE.parse = safeSqliteDateParse;
+  }
+  if ((DataTypes as any).sqlite?.DATE) {
+    (DataTypes as any).sqlite.DATE.parse = safeSqliteDateParse;
+  }
+  (DataTypes.DATE as any).parse = safeSqliteDateParse;
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const parserStore = require('sequelize/lib/dialects/parserStore')('sqlite');
+  if (parserStore && sqliteDataTypes?.DATE) {
+    parserStore.refresh(sqliteDataTypes.DATE);
+  }
+} catch (e) {
+  // Safe fallback if not applicable
+}
+
+export const sequelize =
+  isPostgres && process.env.DATABASE_URL
+    ? new Sequelize(process.env.DATABASE_URL, {
+        dialect: 'postgres',
+        logging: false,
+        pool: {
+          max: 5,
+          min: 0,
+          acquire: 30000,
+          idle: 10000,
+        },
+        dialectOptions:
+          process.env.DATABASE_SSL === 'true'
+            ? {
+                ssl: {
+                  require: true,
+                  rejectUnauthorized: false,
+                },
+              }
+            : {},
+      })
+    : new Sequelize({
+        dialect: 'sqlite',
+        storage: storagePath,
+        logging: false, // Clean console
+      });
+
+if (!isPostgres && (sequelize as any).connectionManager) {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const sqliteDataTypes = require('sequelize/lib/dialects/sqlite/data-types')(DataTypes);
+    if (sqliteDataTypes?.DATE) {
+      sqliteDataTypes.DATE.parse = safeSqliteDateParse;
+      (sequelize as any).connectionManager.refreshTypeParser(sqliteDataTypes.DATE);
+    }
+  } catch (e) {
+    // ignore
+  }
+}
 
 // --- MODELS ---
 
@@ -523,6 +605,16 @@ export interface WorkspaceAttributes {
   tenant_id: string;
   name: string;
   description?: string | null;
+  git_provider?: 'github' | 'gitlab' | null;
+  github_repo?: string | null;
+  github_token?: string | null;
+  gitlab_url?: string | null;
+  gitlab_project?: string | null;
+  gitlab_token?: string | null;
+  allowed_repositories?: string | null;
+  default_target_minutes?: number | null;
+  default_client_daily_target_minutes?: number | null;
+  monthly_billing_goal?: number | null;
   created_at?: Date;
   updated_at?: Date;
 }
@@ -531,6 +623,16 @@ export class Workspace extends Model<WorkspaceAttributes> implements WorkspaceAt
   public tenant_id!: string;
   public name!: string;
   public description!: string | null;
+  public git_provider!: 'github' | 'gitlab' | null;
+  public github_repo!: string | null;
+  public github_token!: string | null;
+  public gitlab_url!: string | null;
+  public gitlab_project!: string | null;
+  public gitlab_token!: string | null;
+  public allowed_repositories!: string | null;
+  public default_target_minutes!: number | null;
+  public default_client_daily_target_minutes!: number | null;
+  public monthly_billing_goal!: number | null;
   public readonly created_at!: Date;
   public readonly updated_at!: Date;
   public readonly Tenant?: Tenant;
@@ -554,6 +656,51 @@ Workspace.init(
     description: {
       type: DataTypes.TEXT,
       allowNull: true,
+    },
+    git_provider: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      defaultValue: 'github',
+    },
+    github_token: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    github_repo: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    gitlab_url: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      defaultValue: 'https://gitlab.com',
+    },
+    gitlab_project: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    gitlab_token: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    allowed_repositories: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    default_target_minutes: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      defaultValue: 60,
+    },
+    default_client_daily_target_minutes: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      defaultValue: 120,
+    },
+    monthly_billing_goal: {
+      type: DataTypes.FLOAT,
+      allowNull: true,
+      defaultValue: 10000.0,
     },
   },
   {
@@ -623,6 +770,7 @@ Workspace.belongsTo(Tenant, { foreignKey: 'tenant_id', as: 'Tenant' });
 export interface TimeSessionAttributes {
   id: string;
   tenant_id: string;
+  workspace_id?: string | null;
   user_id: string;
   client_id?: string | null;
   title?: string;
@@ -640,6 +788,7 @@ export interface TimeSessionAttributes {
 export class TimeSession extends Model<TimeSessionAttributes> implements TimeSessionAttributes {
   public id!: string;
   public tenant_id!: string;
+  public workspace_id!: string | null;
   public user_id!: string;
   public client_id!: string | null;
   public title!: string;
@@ -667,6 +816,10 @@ TimeSession.init(
     tenant_id: {
       type: DataTypes.STRING,
       allowNull: false,
+    },
+    workspace_id: {
+      type: DataTypes.STRING,
+      allowNull: true,
     },
     user_id: {
       type: DataTypes.STRING,
@@ -735,6 +888,7 @@ TimeSession.init(
 export interface ClientAttributes {
   id: string;
   tenant_id: string;
+  workspace_id?: string | null;
   name: string;
   company?: string | null;
   email?: string | null;
@@ -752,6 +906,7 @@ export interface ClientAttributes {
 export class Client extends Model<ClientAttributes> implements ClientAttributes {
   public id!: string;
   public tenant_id!: string;
+  public workspace_id!: string | null;
   public name!: string;
   public company!: string | null;
   public email!: string | null;
@@ -776,6 +931,10 @@ Client.init(
     tenant_id: {
       type: DataTypes.STRING,
       allowNull: false,
+    },
+    workspace_id: {
+      type: DataTypes.STRING,
+      allowNull: true,
     },
     name: {
       type: DataTypes.STRING,
@@ -1150,9 +1309,15 @@ ClientContact.belongsTo(Client, { foreignKey: 'client_id', as: 'Client' });
 Tenant.hasMany(ClientContact, { foreignKey: 'tenant_id' });
 ClientContact.belongsTo(Tenant, { foreignKey: 'tenant_id' });
 
+Workspace.hasMany(TimeSession, { foreignKey: 'workspace_id', as: 'TimeSessions' });
+TimeSession.belongsTo(Workspace, { foreignKey: 'workspace_id', as: 'Workspace' });
+Workspace.hasMany(Client, { foreignKey: 'workspace_id', as: 'Clients' });
+Client.belongsTo(Workspace, { foreignKey: 'workspace_id', as: 'Workspace' });
+
 export interface AiMessageAttributes {
   id: string;
   tenant_id: string;
+  workspace_id?: string | null;
   user_id: string;
   role: 'user' | 'model';
   content: string;
@@ -1163,6 +1328,7 @@ export interface AiMessageAttributes {
 export class AiMessage extends Model<AiMessageAttributes> implements AiMessageAttributes {
   public id!: string;
   public tenant_id!: string;
+  public workspace_id!: string | null;
   public user_id!: string;
   public role!: 'user' | 'model';
   public content!: string;
@@ -1180,6 +1346,10 @@ AiMessage.init(
     tenant_id: {
       type: DataTypes.STRING,
       allowNull: false,
+    },
+    workspace_id: {
+      type: DataTypes.STRING,
+      allowNull: true,
     },
     user_id: {
       type: DataTypes.STRING,
@@ -1216,6 +1386,70 @@ Tenant.hasMany(AiMessage, { foreignKey: 'tenant_id' });
 AiMessage.belongsTo(Tenant, { foreignKey: 'tenant_id' });
 User.hasMany(AiMessage, { foreignKey: 'user_id' });
 AiMessage.belongsTo(User, { foreignKey: 'user_id' });
+Workspace.hasMany(AiMessage, { foreignKey: 'workspace_id', as: 'AiMessages' });
+AiMessage.belongsTo(Workspace, { foreignKey: 'workspace_id', as: 'Workspace' });
+
+export interface WorkspaceAiDailyUsageAttributes {
+  id: string;
+  tenant_id: string;
+  workspace_id: string;
+  date: string; // 'YYYY-MM-DD'
+  count: number;
+}
+export class WorkspaceAiDailyUsage
+  extends Model<WorkspaceAiDailyUsageAttributes>
+  implements WorkspaceAiDailyUsageAttributes {
+  public id!: string;
+  public tenant_id!: string;
+  public workspace_id!: string;
+  public date!: string;
+  public count!: number;
+  public readonly createdAt!: Date;
+  public readonly updatedAt!: Date;
+}
+WorkspaceAiDailyUsage.init(
+  {
+    id: {
+      type: DataTypes.STRING,
+      primaryKey: true,
+      defaultValue: () => crypto.randomUUID(),
+    },
+    tenant_id: {
+      type: DataTypes.STRING,
+      allowNull: false,
+    },
+    workspace_id: {
+      type: DataTypes.STRING,
+      allowNull: false,
+    },
+    date: {
+      type: DataTypes.STRING,
+      allowNull: false,
+    },
+    count: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 0,
+    },
+  },
+  {
+    sequelize,
+    tableName: 'workspace_ai_daily_usages',
+    underscored: true,
+    timestamps: true,
+    indexes: [
+      {
+        unique: true,
+        fields: ['workspace_id', 'date'],
+      },
+    ],
+  }
+);
+
+Workspace.hasMany(WorkspaceAiDailyUsage, { foreignKey: 'workspace_id', as: 'AiDailyUsages' });
+WorkspaceAiDailyUsage.belongsTo(Workspace, { foreignKey: 'workspace_id', as: 'Workspace' });
+Tenant.hasMany(WorkspaceAiDailyUsage, { foreignKey: 'tenant_id' });
+WorkspaceAiDailyUsage.belongsTo(Tenant, { foreignKey: 'tenant_id' });
 
 export interface RefreshTokenAttributes {
   id: string;
@@ -1332,6 +1566,7 @@ PasswordReset.init(
 export interface InviteAttributes {
   id: string;
   tenant_id: string;
+  workspace_id?: string | null;
   email: string;
   role: string; // 'admin' | 'member' | 'guest'
   token: string;
@@ -1344,6 +1579,7 @@ export interface InviteAttributes {
 export class Invite extends Model<InviteAttributes> implements InviteAttributes {
   public id!: string;
   public tenant_id!: string;
+  public workspace_id!: string | null;
   public email!: string;
   public role!: string;
   public token!: string;
@@ -1353,6 +1589,7 @@ export class Invite extends Model<InviteAttributes> implements InviteAttributes 
   public readonly created_at!: Date;
   public readonly updated_at!: Date;
   public readonly Tenant?: Tenant;
+  public readonly Workspace?: Workspace;
   public readonly Inviter?: User;
 }
 Invite.init(
@@ -1365,6 +1602,10 @@ Invite.init(
     tenant_id: {
       type: DataTypes.STRING,
       allowNull: false,
+    },
+    workspace_id: {
+      type: DataTypes.STRING,
+      allowNull: true,
     },
     email: {
       type: DataTypes.STRING,
@@ -1429,17 +1670,33 @@ export async function initDb() {
   await sequelize.query('DROP TABLE IF EXISTS password_resets_backup;').catch(() => {});
   await sequelize.query('DROP TABLE IF EXISTS invites_backup;').catch(() => {});
 
-  // Safe synchronization for SQLite (creates tables if they do not exist)
+  // Safe synchronization (creates tables if they do not exist)
   await sequelize.sync();
 
-  // Helper to ensure a column exists in a SQLite table
+  // Helper to ensure a column exists in either PostgreSQL or SQLite table
   const addColumnIfNotExists = async (table: string, column: string, definition: string) => {
     try {
-      const [columns] = (await sequelize.query(`PRAGMA table_info(${table});`)) as [Array<{ name: string }>, any];
-      const exists = columns.some((c) => c.name === column);
-      if (!exists) {
-        await sequelize.query(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition};`);
-        console.log(`Added column ${column} to table ${table}`);
+      if (DB_TYPE === 'postgres') {
+        const [results] = (await sequelize.query(
+          `SELECT column_name FROM information_schema.columns WHERE table_name = :table AND column_name = :column;`,
+          { replacements: { table, column } }
+        )) as [Array<{ column_name: string }>, any];
+
+        if (results.length === 0) {
+          const pgDef = definition
+            .replace(/DATETIME/gi, 'TIMESTAMP WITH TIME ZONE')
+            .replace(/BOOLEAN DEFAULT 1/gi, 'BOOLEAN DEFAULT TRUE')
+            .replace(/BOOLEAN DEFAULT 0/gi, 'BOOLEAN DEFAULT FALSE');
+          await sequelize.query(`ALTER TABLE "${table}" ADD COLUMN "${column}" ${pgDef};`);
+          console.log(`[PostgreSQL] Added column ${column} to table ${table}`);
+        }
+      } else {
+        const [columns] = (await sequelize.query(`PRAGMA table_info(${table});`)) as [Array<{ name: string }>, any];
+        const exists = columns.some((c) => c.name === column);
+        if (!exists) {
+          await sequelize.query(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition};`);
+          console.log(`[SQLite] Added column ${column} to table ${table}`);
+        }
       }
     } catch (e) {
       console.warn(`Could not add column ${column} to table ${table}:`, e);
@@ -1509,9 +1766,28 @@ export async function initDb() {
   await addColumnIfNotExists('invoices', 'period_start', 'DATETIME');
   await addColumnIfNotExists('invoices', 'period_end', 'DATETIME');
 
+  await addColumnIfNotExists('time_sessions', 'workspace_id', 'VARCHAR(255)');
+  await addColumnIfNotExists('clients', 'workspace_id', 'VARCHAR(255)');
+  await addColumnIfNotExists('ai_messages', 'workspace_id', 'VARCHAR(255)');
+  await addColumnIfNotExists('tenants', 'workspace_id', 'VARCHAR(255)');
+  await addColumnIfNotExists('invites', 'workspace_id', 'VARCHAR(255)');
+  await addColumnIfNotExists('workspaces', 'git_provider', "VARCHAR(50) DEFAULT 'github'");
+  await addColumnIfNotExists('workspaces', 'github_token', 'VARCHAR(255)');
+  await addColumnIfNotExists('workspaces', 'github_repo', 'VARCHAR(255)');
+  await addColumnIfNotExists('workspaces', 'gitlab_url', "VARCHAR(255) DEFAULT 'https://gitlab.com'");
+  await addColumnIfNotExists('workspaces', 'gitlab_project', 'VARCHAR(255)');
+  await addColumnIfNotExists('workspaces', 'gitlab_token', 'VARCHAR(255)');
+  await addColumnIfNotExists('workspaces', 'allowed_repositories', 'TEXT');
+  await addColumnIfNotExists('workspaces', 'default_target_minutes', 'INTEGER DEFAULT 60');
+  await addColumnIfNotExists('workspaces', 'default_client_daily_target_minutes', 'INTEGER DEFAULT 120');
+  await addColumnIfNotExists('workspaces', 'monthly_billing_goal', 'FLOAT DEFAULT 10000.0');
+
   // Plan columns migration
   await addColumnIfNotExists('plans', 'max_workspaces', 'INTEGER DEFAULT 1');
   await addColumnIfNotExists('plans', 'max_sessions_per_month', 'INTEGER DEFAULT -1');
+
+  // Ensure WorkspaceAiDailyUsage table exists
+  await WorkspaceAiDailyUsage.sync();
 
   // Ensure default plans exist (free, pro, team)
   const defaultPlans = [
@@ -1525,13 +1801,13 @@ export async function initDb() {
       max_users: 1,
       max_clients: 3,
       max_sessions_per_month: 50,
-      max_storage_mb: 500,
+      max_storage_mb: -1,
       features: JSON.stringify([
         '1 Workspace',
+        '2 Perguntas para a IA por dia por workspace',
         'Até 3 Clientes',
         '50 Sessões por mês',
         'Timer Resiliente e Relatórios Básicos',
-        '500 MB de Armazenamento',
         'Integração Git Básica (GitHub / GitLab)',
       ]),
       is_active: true,
@@ -1539,21 +1815,21 @@ export async function initDb() {
     {
       id: 'pro',
       name: 'Pro',
-      description: 'Para profissionais em crescimento e consultores que precisam de clientes e sessões ilimitadas com IA.',
-      price_monthly: 29.0,
-      price_yearly: 290.0,
+      description: 'Plano individual para profissionais autônomos com clientes, sessões ilimitadas, IA e exportação completa.',
+      price_monthly: 9.99,
+      price_yearly: 99.90,
       max_workspaces: -1,
-      max_users: 5,
+      max_users: 1, // Individual - não aceita membros adicionais
       max_clients: -1,
       max_sessions_per_month: -1,
-      max_storage_mb: 10240, // 10 GB
+      max_storage_mb: -1,
       features: JSON.stringify([
         'Workspaces Ilimitados',
-        'Clientes Ilimitados',
-        'Sessões Ilimitadas',
-        'Assistente de IA Cronos Ilimitado (Visão e Áudio)',
-        'Até 5 Membros de Equipe',
-        '10 GB de Armazenamento',
+        '25 Mensagens para a IA por dia por workspace',
+        'Clientes e Sessões Ilimitadas',
+        'Exportação Completa dos Dados do Workspace',
+        'Uso Individual (R$ 9,99/mês - 1 usuário)',
+        'Assistente de IA Cronos (Visão e Áudio)',
         'Relatórios com Link de Aprovação do Cliente',
       ]),
       is_active: true,
@@ -1561,22 +1837,24 @@ export async function initDb() {
     {
       id: 'team',
       name: 'Team',
-      description: 'Tudo do Pro mais equipe expandida, controle avançado de permissões e integrações.',
-      price_monthly: 79.0,
-      price_yearly: 790.0,
+      description: 'Para agências e equipes. Cobrança por usuário (R$ 4,99/mês por membro, mínimo de 5 usuários).',
+      price_monthly: 4.99,
+      price_yearly: 49.90,
       max_workspaces: -1,
-      max_users: 25,
+      max_users: -1, // Ilimitado - cobrado por membro
       max_clients: -1,
       max_sessions_per_month: -1,
-      max_storage_mb: 51200, // 50 GB
+      max_storage_mb: -1,
       features: JSON.stringify([
         'Tudo do Plano Pro Incluso',
+        'Cobrança por Usuário (R$ 4,99/mês por membro - Mínimo de 5 usuários)',
+        'Convite de Membros de Equipe Ilimitados',
+        '100 Mensagens para a IA por dia por workspace',
         'Workspaces e Clientes Ilimitados',
-        'Sessões Ilimitadas com IA',
+        'Exportação Completa dos Dados do Workspace',
         'Gestão de Membros de Equipe e Funções (Admin, Membro, Financeiro)',
         'Permissões Granulares de Repositórios Git',
         'Integrações Avançadas e Webhooks',
-        '50 GB de Armazenamento',
         'Suporte Prioritário & SLA Garantido',
       ]),
       is_active: true,
@@ -1843,7 +2121,7 @@ export async function initDb() {
     console.error('Error synchronizing tenant plans/subscriptions:', err);
   }
 
-  // Ensure default workspaces exist for users
+  // Ensure default workspaces exist for users and backfill legacy data
   try {
     const allUsers = await User.findAll();
     for (const user of allUsers) {
@@ -1869,7 +2147,30 @@ export async function initDb() {
         });
       }
     }
+
+    // Backfill legacy clients and time_sessions that have NULL or empty workspace_id
+    const allTenants = await Tenant.findAll();
+    for (const t of allTenants) {
+      let defaultWorkspace = await Workspace.findOne({ where: { tenant_id: t.id } });
+      if (!defaultWorkspace) {
+        defaultWorkspace = await Workspace.create({
+          tenant_id: t.id,
+          name: t.name ? `Workspace de ${t.name}` : 'Workspace Principal',
+          description: 'Workspace padrão',
+        });
+      }
+
+      await sequelize.query(
+        `UPDATE clients SET workspace_id = :workspaceId WHERE tenant_id = :tenantId AND (workspace_id IS NULL OR workspace_id = '')`,
+        { replacements: { workspaceId: defaultWorkspace.id, tenantId: t.id } }
+      );
+
+      await sequelize.query(
+        `UPDATE time_sessions SET workspace_id = :workspaceId WHERE tenant_id = :tenantId AND (workspace_id IS NULL OR workspace_id = '')`,
+        { replacements: { workspaceId: defaultWorkspace.id, tenantId: t.id } }
+      );
+    }
   } catch (err) {
-    console.error('Error seeding default workspaces:', err);
+    console.error('Error seeding default workspaces and backfilling legacy records:', err);
   }
 }

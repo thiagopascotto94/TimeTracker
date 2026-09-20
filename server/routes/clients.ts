@@ -1,8 +1,10 @@
 import { Router, Response } from 'express';
 import bcrypt from 'bcryptjs';
+import { Op } from 'sequelize';
 import { Client, ClientContact, TimeSession } from '../db';
 import { authMiddleware, AuthenticatedRequest } from '../auth';
 import { checkPlanLimit } from '../billing';
+import { cacheGet, cacheSet, cacheDel } from '../cache';
 
 export const clientsRouter = Router();
 
@@ -20,9 +22,23 @@ function generateRandomPassword(length = 8): string {
 // GET /api/clients
 clientsRouter.get('/', async (req: AuthenticatedRequest, res: Response) => {
   try {
+    const cacheKey = `cronos:clients:${req.tenantId}:${req.workspaceId || 'all'}`;
+    const cached = await cacheGet(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+
     const clients = await Client.findAll({
       where: {
         tenant_id: req.tenantId!,
+        ...(req.workspaceId
+          ? {
+              [Op.or]: [
+                { workspace_id: req.workspaceId },
+                { workspace_id: null },
+              ],
+            }
+          : {}),
       },
       include: [
         {
@@ -36,7 +52,9 @@ clientsRouter.get('/', async (req: AuthenticatedRequest, res: Response) => {
         [{ model: ClientContact, as: 'Contacts' }, 'created_at', 'ASC'],
       ],
     });
-    return res.json({ clients });
+    const payload = { clients };
+    await cacheSet(cacheKey, payload, 60);
+    return res.json(payload);
   } catch (err: any) {
     console.error('Error fetching clients:', err);
     return res.status(500).json({ error: 'Erro ao buscar clientes' });
@@ -76,6 +94,7 @@ clientsRouter.post('/', checkPlanLimit('clients'), async (req: AuthenticatedRequ
 
     const client = await Client.create({
       tenant_id: req.tenantId!,
+      workspace_id: req.workspaceId || null,
       name: name.trim(),
       company: company?.trim() || null,
       email: email?.trim() || null,
@@ -92,6 +111,8 @@ clientsRouter.post('/', checkPlanLimit('clients'), async (req: AuthenticatedRequ
       gitlab_token: gitlab_token?.trim() || null,
       allowed_repositories: serializedAllowedRepos,
     });
+
+    await cacheDel('cronos:clients:*');
 
     return res.status(201).json({ message: 'Cliente cadastrado com sucesso', client });
   } catch (err: any) {
@@ -130,6 +151,8 @@ clientsRouter.put('/batch-daily-targets', async (req: AuthenticatedRequest, res:
       where: { tenant_id: req.tenantId! },
       order: [['name', 'ASC']],
     });
+
+    await cacheDel('cronos:clients:*');
 
     return res.json({ message: 'Metas diárias atualizadas com sucesso', clients: updatedClients });
   } catch (err: any) {
@@ -195,6 +218,7 @@ clientsRouter.put('/:id', async (req: AuthenticatedRequest, res: Response) => {
     }
 
     await client.save();
+    await cacheDel('cronos:clients:*');
 
     return res.json({ message: 'Cliente atualizado com sucesso', client });
   } catch (err: any) {
@@ -226,6 +250,7 @@ clientsRouter.delete('/:id', async (req: AuthenticatedRequest, res: Response) =>
     );
 
     await client.destroy();
+    await cacheDel('cronos:clients:*');
 
     return res.json({ message: 'Cliente excluído com sucesso' });
   } catch (err: any) {

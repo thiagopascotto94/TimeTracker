@@ -7,7 +7,7 @@ import { useToast } from './ui/toast';
 import { apiFetch } from '../utils/api';
 
 interface LoginViewProps {
-  onLoginSuccess: (user: User, tenant: Tenant) => void;
+  onLoginSuccess: (user: User, tenant: Tenant, hasLinkedClients?: boolean) => void;
 }
 
 export function LoginView({ onLoginSuccess }: LoginViewProps) {
@@ -58,7 +58,7 @@ export function LoginView({ onLoginSuccess }: LoginViewProps) {
         localStorage.setItem('jwt_token', data.token);
       }
 
-      onLoginSuccess(data.user, data.tenant);
+      onLoginSuccess(data.user, data.tenant, Boolean(data.has_linked_clients));
       addToast({
         title: 'Login efetuado com sucesso!',
         description: `Bem-vindo de volta, ${data.user.name}.`,
@@ -103,12 +103,20 @@ export function LoginView({ onLoginSuccess }: LoginViewProps) {
         localStorage.setItem('jwt_token', data.token);
       }
 
-      onLoginSuccess(data.user, data.tenant);
-      addToast({
-        title: 'Conta criada com sucesso!',
-        description: `Workspace isolado ${data.tenant?.name} pronto para uso.`,
-        variant: 'success',
-      });
+      onLoginSuccess(data.user, data.tenant, Boolean(data.has_linked_clients));
+      if (data.has_linked_clients) {
+        addToast({
+          title: 'Vínculos de cliente localizados!',
+          description: `Seu e-mail está cadastrado como cliente em outros workspaces. Uma nova área de visualização foi disponibilizada.`,
+          variant: 'default',
+        });
+      } else {
+        addToast({
+          title: 'Conta criada com sucesso!',
+          description: `Workspace isolado ${data.tenant?.name} pronto para uso.`,
+          variant: 'success',
+        });
+      }
     } catch (err: any) {
       setErrorMessage(err.message || 'Erro no cadastro');
       addToast({

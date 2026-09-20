@@ -21,6 +21,10 @@ import {
   BookOpen,
   Layers,
   Bot,
+  Download,
+  FileJson,
+  Lock,
+  Loader2,
 } from 'lucide-react';
 import { BillingStatus, Plan, InvoiceItem } from '../types';
 import { apiFetch } from '../utils/api';
@@ -59,7 +63,43 @@ export const BillingSettingsTab: React.FC<BillingSettingsTabProps> = ({ onPlanCh
   // Dev simulation tool state
   const [simulatingWebhook, setSimulatingWebhook] = useState<boolean>(false);
 
+  // Workspace export state
+  const [exportingWorkspace, setExportingWorkspace] = useState<boolean>(false);
+
   const { addToast } = useToast();
+
+  const handleExportWorkspace = async () => {
+    try {
+      setExportingWorkspace(true);
+      const res = await apiFetch('/api/workspaces/export');
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Erro ao exportar dados do workspace');
+      }
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `cronos-workspace-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+      addToast({
+        title: 'Exportação Concluída!',
+        description: 'Backup completo de todos os dados do workspace baixado com sucesso em formato JSON.',
+        variant: 'success',
+      });
+    } catch (err: any) {
+      addToast({
+        title: 'Falha na Exportação',
+        description: err.message,
+        variant: 'destructive',
+      });
+    } finally {
+      setExportingWorkspace(false);
+    }
+  };
 
   const fetchBillingStatus = async () => {
     try {
@@ -178,12 +218,13 @@ export const BillingSettingsTab: React.FC<BillingSettingsTabProps> = ({ onPlanCh
         // Modo simulação em ambiente sem chaves do Stripe
         addToast({
           title: 'Upgrade realizado com sucesso!',
-          description: data.message || `Plano ${targetPlanId.toUpperCase()} ativado.`,
+          description: (data.message || `Plano ${targetPlanId.toUpperCase()} ativado.`) + ' Atualizando sistema...',
           variant: 'default',
         });
         setBilling(data.billing);
         await fetchInvoices();
         if (onPlanChanged) onPlanChanged();
+        setTimeout(() => window.location.reload(), 1200);
       }
     } catch (err: any) {
       console.error('Error initiating plan switch:', err);
@@ -241,7 +282,7 @@ export const BillingSettingsTab: React.FC<BillingSettingsTabProps> = ({ onPlanCh
 
       addToast({
         title: 'Assinatura cancelada',
-        description: data.message,
+        description: (data.message || '') + ' Atualizando sistema...',
         variant: 'default',
       });
 
@@ -249,6 +290,7 @@ export const BillingSettingsTab: React.FC<BillingSettingsTabProps> = ({ onPlanCh
       setCancelModalOpen(false);
       await fetchInvoices();
       if (onPlanChanged) onPlanChanged();
+      setTimeout(() => window.location.reload(), 1200);
     } catch (err: any) {
       addToast({
         title: 'Erro no cancelamento',
@@ -270,12 +312,13 @@ export const BillingSettingsTab: React.FC<BillingSettingsTabProps> = ({ onPlanCh
 
       addToast({
         title: 'Assinatura reativada!',
-        description: data.message || 'Sua assinatura continuará renovando automaticamente.',
+        description: (data.message || 'Sua assinatura continuará renovando automaticamente.') + ' Atualizando sistema...',
         variant: 'default',
       });
 
       setBilling(data.billing);
       if (onPlanChanged) onPlanChanged();
+      setTimeout(() => window.location.reload(), 1200);
     } catch (err: any) {
       addToast({
         title: 'Erro ao reativar',
@@ -301,13 +344,14 @@ export const BillingSettingsTab: React.FC<BillingSettingsTabProps> = ({ onPlanCh
 
       addToast({
         title: 'Evento de Webhook Simulado',
-        description: data.message,
+        description: (data.message || '') + ' Atualizando sistema...',
         variant: 'default',
       });
 
       setBilling(data.billing);
       await fetchInvoices();
       if (onPlanChanged) onPlanChanged();
+      setTimeout(() => window.location.reload(), 1200);
     } catch (err: any) {
       addToast({
         title: 'Falha na simulação',
@@ -438,16 +482,18 @@ export const BillingSettingsTab: React.FC<BillingSettingsTabProps> = ({ onPlanCh
               </div>
 
               <div className="flex items-center gap-2">
-                <Button
-                  onClick={() => setGuideModalOpen(true)}
-                  variant="outline"
-                  size="sm"
-                  className="text-xs h-8 cursor-pointer bg-white dark:bg-neutral-800 text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 hover:bg-indigo-50 dark:hover:bg-neutral-700 border-indigo-200 dark:border-indigo-900/50"
-                  title="Ver documentação completa das Fases 1 e 2"
-                >
-                  <BookOpen className="w-3.5 h-3.5 mr-1.5" />
-                  <span>Manual Fase 1 & 2</span>
-                </Button>
+                {import.meta.env.DEV && (
+                  <Button
+                    onClick={() => setGuideModalOpen(true)}
+                    variant="outline"
+                    size="sm"
+                    className="text-xs h-8 cursor-pointer bg-white dark:bg-neutral-800 text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 hover:bg-indigo-50 dark:hover:bg-neutral-700 border-indigo-200 dark:border-indigo-900/50"
+                    title="Ver documentação completa das Fases 1 e 2"
+                  >
+                    <BookOpen className="w-3.5 h-3.5 mr-1.5" />
+                    <span>Manual Fase 1 & 2</span>
+                  </Button>
+                )}
 
                 <Button
                   onClick={handleSyncStripe}
@@ -473,11 +519,19 @@ export const BillingSettingsTab: React.FC<BillingSettingsTabProps> = ({ onPlanCh
                     Plano {plan.name}
                   </span>
                   <span className="text-sm font-semibold text-neutral-500">
-                    • {plan.price_monthly === 0 ? 'Gratuito' : `${formatCurrency(plan.price_monthly)}/mês`}
+                    • {plan.price_monthly === 0
+                      ? 'Gratuito'
+                      : plan.id === 'team'
+                      ? `${formatCurrency(plan.price_monthly)}/usuário/mês`
+                      : `${formatCurrency(plan.price_monthly)}/mês`}
                   </span>
                 </div>
                 <p className="text-xs text-neutral-500 dark:text-neutral-400">
-                  {plan.description || 'Acesso completo às ferramentas de faturamento e cronômetro.'}
+                  {plan.id === 'pro'
+                    ? 'Plano individual (1 usuário) com IA ilimitada e exportação de dados completa.'
+                    : plan.id === 'team'
+                    ? 'Plano de equipe com cobrança por assento, convites ilimitados e exportação de dados.'
+                    : (plan.description || 'Acesso completo às ferramentas de faturamento e cronômetro.')}
                 </p>
 
                 {formattedPeriodEnd && !isFreePlan && (
@@ -602,6 +656,87 @@ export const BillingSettingsTab: React.FC<BillingSettingsTabProps> = ({ onPlanCh
                   />
                 </div>
               </div>
+            </div>
+
+            {/* Team Billing calculation breakdown if on Team plan or has team_billing */}
+            {billing?.team_billing && (
+              <div className="p-3.5 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-900/50 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                <div className="space-y-0.5">
+                  <div className="font-semibold text-indigo-950 dark:text-indigo-200 flex items-center gap-1.5">
+                    <Users className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                    <span>Faturamento do Plano Team por Assento</span>
+                  </div>
+                  <p className="text-2xs text-indigo-700 dark:text-indigo-300">
+                    {billing.team_billing.active_users} membro(s) ativo(s) + {billing.team_billing.pending_invites} convite(s) pendente(s) = <strong>{billing.team_billing.total_seats} assento(s)</strong> no workspace.
+                  </p>
+                </div>
+                <div className="sm:text-right">
+                  <span className="text-sm font-bold text-indigo-900 dark:text-indigo-100">
+                    {formatCurrency(billing.team_billing.price_per_user_monthly)} / usuário / mês
+                  </span>
+                  <div className="text-2xs text-indigo-600 dark:text-indigo-400 font-medium">
+                    Total mensal calculado: {formatCurrency(billing.team_billing.total_seats * billing.team_billing.price_per_user_monthly)}/mês
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Workspace Data Export row */}
+            <div className="pt-3 border-t border-neutral-100 dark:border-neutral-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="space-y-0.5">
+                <div className="text-xs font-semibold text-neutral-800 dark:text-neutral-200 flex items-center gap-1.5">
+                  <FileJson className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                  <span>Backup &amp; Exportação Completa do Workspace</span>
+                  {billing?.can_export_workspace ? (
+                    <Badge className="bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-0 text-3xs font-semibold">
+                      Incluso no seu plano
+                    </Badge>
+                  ) : (
+                    <Badge className="bg-amber-500/15 text-amber-700 dark:text-amber-300 border-0 text-3xs font-semibold flex items-center gap-1">
+                      <Lock className="w-2.5 h-2.5" />
+                      <span>Pro &amp; Team</span>
+                    </Badge>
+                  )}
+                </div>
+                <p className="text-2xs text-neutral-500 dark:text-neutral-400">
+                  Gera um arquivo JSON completo com clientes, sessões registradas, metas, faturas e membros.
+                </p>
+              </div>
+
+              {billing?.can_export_workspace ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={handleExportWorkspace}
+                  disabled={exportingWorkspace}
+                  className="shrink-0 text-xs bg-indigo-600 hover:bg-indigo-700 text-white font-semibold cursor-pointer shadow-xs gap-1.5"
+                >
+                  {exportingWorkspace ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Exportando...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Exportar Workspace (.json)</span>
+                    </>
+                  )}
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    const plansEl = document.getElementById('pricing-plans-section');
+                    if (plansEl) plansEl.scrollIntoView({ behavior: 'smooth' });
+                  }}
+                  className="shrink-0 text-xs text-indigo-600 border-indigo-200 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 cursor-pointer"
+                >
+                  <span>Upgrade para Exportar</span>
+                </Button>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -761,16 +896,22 @@ export const BillingSettingsTab: React.FC<BillingSettingsTabProps> = ({ onPlanCh
                       <span className="text-2xl font-extrabold text-neutral-900 dark:text-neutral-100">
                         {price === 0 ? 'R$ 0' : formatCurrency(monthlyEquivalent)}
                       </span>
-                      <span className="text-xs text-neutral-400">/mês</span>
+                      <span className="text-xs text-neutral-400">
+                        {p.id === 'team' ? '/usuário/mês' : '/mês'}
+                      </span>
                     </div>
 
                     {billingInterval === 'yearly' && p.price_yearly > 0 ? (
                       <p className="text-2xs text-emerald-600 dark:text-emerald-400 font-medium mt-0.5">
-                        Cobrado anualmente ({formatCurrency(p.price_yearly)}/ano)
+                        Cobrado anualmente ({formatCurrency(p.price_yearly)}{p.id === 'team' ? '/ano por usuário' : '/ano'})
                       </p>
                     ) : (
                       p.price_monthly > 0 && (
-                        <p className="text-2xs text-neutral-400 mt-0.5">Cobrança recorrente mensal</p>
+                        <p className="text-2xs text-neutral-400 mt-0.5">
+                          {p.id === 'team'
+                            ? 'Cobrança mensal por usuário convidado no workspace'
+                            : 'Cobrança recorrente individual mensal'}
+                        </p>
                       )
                     )}
                   </div>
@@ -799,7 +940,19 @@ export const BillingSettingsTab: React.FC<BillingSettingsTabProps> = ({ onPlanCh
                     </div>
                     <div className="flex items-center justify-between">
                       <span className="text-neutral-400">Membros de Equipe:</span>
-                      <span className="font-semibold">{p.max_users === -1 ? 'Ilimitado' : `${p.max_users} usuário(s)`}</span>
+                      <span className="font-semibold">
+                        {p.id === 'team'
+                          ? 'Ilimitados (R$ 9,90/usuário)'
+                          : p.id === 'pro'
+                          ? 'Individual (1 usuário, sem convites)'
+                          : '1 usuário'}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-neutral-400">Backup &amp; Exportação:</span>
+                      <span className={`font-semibold ${p.id !== 'free' ? 'text-emerald-600 dark:text-emerald-400' : 'text-neutral-400'}`}>
+                        {p.id === 'free' ? 'Não incluso' : 'Incluso (.json)'}
+                      </span>
                     </div>
                   </div>
 
@@ -977,61 +1130,63 @@ export const BillingSettingsTab: React.FC<BillingSettingsTabProps> = ({ onPlanCh
       </Card>
 
       {/* Developer & Test Helper Box (Simulate Webhook) */}
-      <div className="p-4 rounded-xl bg-neutral-100 dark:bg-neutral-800/40 border border-neutral-200 dark:border-neutral-700/60 space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-bold text-neutral-800 dark:text-neutral-200">
-              🛠️ Testes de Webhooks e Simulações (Fase 2)
+      {import.meta.env.DEV && (
+        <div className="p-4 rounded-xl bg-neutral-100 dark:bg-neutral-800/40 border border-neutral-200 dark:border-neutral-700/60 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-neutral-800 dark:text-neutral-200">
+                🛠️ Testes de Webhooks e Simulações (Fase 2)
+              </span>
+              <Badge variant="outline" className="text-3xs">
+                {is_stripe_configured ? 'Stripe Configurado' : 'Modo Simulado'}
+              </Badge>
+            </div>
+            <span className="text-3xs text-neutral-400">
+              Validação de fluxos de confirmação de pagamento e downgrade automático
             </span>
-            <Badge variant="outline" className="text-3xs">
-              {is_stripe_configured ? 'Stripe Configurado' : 'Modo Simulado'}
-            </Badge>
           </div>
-          <span className="text-3xs text-neutral-400">
-            Validação de fluxos de confirmação de pagamento e downgrade automático
-          </span>
+
+          <p className="text-xs text-neutral-600 dark:text-neutral-400">
+            Utilize estes gatilhos para testar em tempo real os eventos que o Stripe envia para o webhook{' '}
+            <code className="bg-neutral-200 dark:bg-neutral-700 px-1 py-0.5 rounded text-2xs font-mono">
+              /api/billing/webhook
+            </code>
+            :
+          </p>
+
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            <Button
+              onClick={() => handleSimulateWebhook('checkout.session.completed', 'pro')}
+              disabled={simulatingWebhook}
+              variant="outline"
+              size="sm"
+              className="text-2xs h-7 bg-white dark:bg-neutral-900 cursor-pointer"
+            >
+              Simular Pagamento Pro (checkout.session.completed)
+            </Button>
+
+            <Button
+              onClick={() => handleSimulateWebhook('invoice.paid', 'team')}
+              disabled={simulatingWebhook}
+              variant="outline"
+              size="sm"
+              className="text-2xs h-7 bg-white dark:bg-neutral-900 cursor-pointer"
+            >
+              Simular Renovação Team (invoice.paid)
+            </Button>
+
+            <Button
+              onClick={() => handleSimulateWebhook('customer.subscription.deleted')}
+              disabled={simulatingWebhook}
+              variant="outline"
+              size="sm"
+              className="text-2xs h-7 bg-white dark:bg-neutral-900 text-red-600 hover:text-red-700 cursor-pointer"
+            >
+              Simular Cancelamento Total & Downgrade Automático
+            </Button>
+          </div>
         </div>
-
-        <p className="text-xs text-neutral-600 dark:text-neutral-400">
-          Utilize estes gatilhos para testar em tempo real os eventos que o Stripe envia para o webhook{' '}
-          <code className="bg-neutral-200 dark:bg-neutral-700 px-1 py-0.5 rounded text-2xs font-mono">
-            /api/billing/webhook
-          </code>
-          :
-        </p>
-
-        <div className="flex flex-wrap items-center gap-2 pt-1">
-          <Button
-            onClick={() => handleSimulateWebhook('checkout.session.completed', 'pro')}
-            disabled={simulatingWebhook}
-            variant="outline"
-            size="sm"
-            className="text-2xs h-7 bg-white dark:bg-neutral-900 cursor-pointer"
-          >
-            Simular Pagamento Pro (checkout.session.completed)
-          </Button>
-
-          <Button
-            onClick={() => handleSimulateWebhook('invoice.paid', 'team')}
-            disabled={simulatingWebhook}
-            variant="outline"
-            size="sm"
-            className="text-2xs h-7 bg-white dark:bg-neutral-900 cursor-pointer"
-          >
-            Simular Renovação Team (invoice.paid)
-          </Button>
-
-          <Button
-            onClick={() => handleSimulateWebhook('customer.subscription.deleted')}
-            disabled={simulatingWebhook}
-            variant="outline"
-            size="sm"
-            className="text-2xs h-7 bg-white dark:bg-neutral-900 text-red-600 hover:text-red-700 cursor-pointer"
-          >
-            Simular Cancelamento Total & Downgrade Automático
-          </Button>
-        </div>
-      </div>
+      )}
 
       {/* Cancel Subscription Confirmation Dialog */}
       <Dialog
@@ -1041,6 +1196,18 @@ export const BillingSettingsTab: React.FC<BillingSettingsTabProps> = ({ onPlanCh
         description="Confirme o cancelamento do plano atual do seu workspace."
       >
         <div className="space-y-4 pt-2 text-xs">
+          {usage?.workspaces?.current && usage.workspaces.current > 1 ? (
+            <div className="p-3 rounded-lg bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/60 text-red-800 dark:text-red-300 space-y-1">
+              <p className="font-semibold flex items-center gap-1.5">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0 text-red-600 dark:text-red-400" />
+                Bloqueio de Workspaces Adicionais ({usage.workspaces.current} existentes)
+              </p>
+              <p className="text-2xs leading-relaxed">
+                Sua organização possui {usage.workspaces.current} workspaces. No plano Free, <strong>apenas o primeiro workspace criado continuará liberado</strong>. Os demais workspaces ficarão bloqueados para acesso e qualquer tipo de edição até que você faça um novo upgrade para o plano Pro.
+              </p>
+            </div>
+          ) : null}
+
           <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 text-amber-800 dark:text-amber-300 space-y-1">
             <p className="font-semibold">O que acontece ao cancelar?</p>
             <ul className="list-disc pl-4 space-y-1 text-2xs">
@@ -1097,7 +1264,9 @@ export const BillingSettingsTab: React.FC<BillingSettingsTabProps> = ({ onPlanCh
       </Dialog>
 
       {/* Manual Completo das Fases 1 e 2 */}
-      <BillingGuideModal open={guideModalOpen} onOpenChange={setGuideModalOpen} />
+      {import.meta.env.DEV && (
+        <BillingGuideModal open={guideModalOpen} onOpenChange={setGuideModalOpen} />
+      )}
     </div>
   );
 };

@@ -205,14 +205,14 @@ export const BillingGuideModal: React.FC<BillingGuideModalProps> = ({ open, onOp
                     <tr>
                       <td className="p-2.5 font-medium">Preço Mensal</td>
                       <td className="p-2.5">R$ 0,00</td>
-                      <td className="p-2.5 text-indigo-600 font-bold">R$ 29,00 / mês</td>
-                      <td className="p-2.5 text-indigo-600 font-bold">R$ 79,00 / mês</td>
+                      <td className="p-2.5 text-indigo-600 font-bold">R$ 4,99 / mês</td>
+                      <td className="p-2.5 text-indigo-600 font-bold">R$ 9,90 / usuário / mês</td>
                     </tr>
                     <tr>
                       <td className="p-2.5 font-medium">Preço Anual (17% OFF)</td>
                       <td className="p-2.5">-</td>
-                      <td className="p-2.5 text-emerald-600 font-bold">R$ 290,00 / ano</td>
-                      <td className="p-2.5 text-emerald-600 font-bold">R$ 790,00 / ano</td>
+                      <td className="p-2.5 text-emerald-600 font-bold">R$ 49,90 / ano</td>
+                      <td className="p-2.5 text-emerald-600 font-bold">R$ 99,00 / usuário / ano</td>
                     </tr>
                     <tr>
                       <td className="p-2.5 font-medium flex items-center gap-1">
@@ -243,8 +243,8 @@ export const BillingGuideModal: React.FC<BillingGuideModalProps> = ({ open, onOp
                         <Users className="w-3.5 h-3.5 text-neutral-400" /> Membros de Equipe
                       </td>
                       <td className="p-2.5">1 usuário</td>
-                      <td className="p-2.5">Até 5 membros</td>
-                      <td className="p-2.5 font-bold text-indigo-600">Até 25 membros + Permissões</td>
+                      <td className="p-2.5 font-bold text-neutral-600">Individual (1 usuário, sem convites)</td>
+                      <td className="p-2.5 font-bold text-indigo-600">Ilimitados (R$ 9,90 por assento)</td>
                     </tr>
                     <tr>
                       <td className="p-2.5 font-medium flex items-center gap-1">
@@ -253,6 +253,14 @@ export const BillingGuideModal: React.FC<BillingGuideModalProps> = ({ open, onOp
                       <td className="p-2.5">Básico</td>
                       <td className="p-2.5 font-bold text-indigo-600">Ilimitado com Visão & Áudio</td>
                       <td className="p-2.5 font-bold text-indigo-600">Ilimitado + Equipe & Integrações</td>
+                    </tr>
+                    <tr>
+                      <td className="p-2.5 font-medium flex items-center gap-1">
+                        <HardDrive className="w-3.5 h-3.5 text-neutral-400" /> Exportação Completa de Dados
+                      </td>
+                      <td className="p-2.5 text-neutral-400">Não disponível</td>
+                      <td className="p-2.5 font-bold text-emerald-600">Incluso (Backup JSON)</td>
+                      <td className="p-2.5 font-bold text-emerald-600">Incluso (Backup JSON)</td>
                     </tr>
                     <tr>
                       <td className="p-2.5 font-medium flex items-center gap-1">

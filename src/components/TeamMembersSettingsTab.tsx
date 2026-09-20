@@ -65,6 +65,7 @@ export function TeamMembersSettingsTab({
     max_users: number;
     limit_reached: boolean;
     plan_name: string;
+    plan_id: string;
   } | null>(null);
 
   // Modal / Form state
@@ -106,6 +107,7 @@ export function TeamMembersSettingsTab({
           max_users: maxUsers,
           limit_reached: limitReached,
           plan_name: billingData.plan?.name || 'Free',
+          plan_id: billingData.plan?.id || 'free',
         });
       }
     } catch (err: any) {
@@ -263,13 +265,45 @@ export function TeamMembersSettingsTab({
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {planLimits?.limit_reached ? (
+          {planLimits && planLimits.plan_id !== 'team' ? (
+            <div className="p-4 bg-indigo-50/80 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-900/60 rounded-xl space-y-3">
+              <div className="flex items-start gap-3">
+                <AlertCircle className="w-5 h-5 shrink-0 mt-0.5 text-indigo-600 dark:text-indigo-400" />
+                <div className="space-y-1">
+                  <p className="text-xs font-bold text-indigo-900 dark:text-indigo-100">
+                    {planLimits.plan_id === 'pro'
+                      ? 'O Plano Pro é de uso estritamente individual (1 usuário).'
+                      : 'Convites de equipe requerem o Plano Team.'}
+                  </p>
+                  <p className="text-2xs text-indigo-700 dark:text-indigo-300 leading-relaxed">
+                    {planLimits.plan_id === 'pro'
+                      ? 'Seu plano Pro (R$ 4,99/mês) inclui todas as ferramentas avançadas, IA ilimitada e exportação de dados, porém não aceita novos membros. Para colaborar em equipe com múltiplos usuários e convites, faça upgrade para o plano Team (R$ 9,90 por usuário).'
+                      : 'O envio de convites e gestão de múltiplos colaboradores no workspace está disponível exclusivamente no plano Team (R$ 9,90/mês por usuário).'}
+                  </p>
+                </div>
+              </div>
+
+              {onNavigateToBilling && (
+                <div className="pt-1 flex items-center gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={onNavigateToBilling}
+                    className="text-xs bg-indigo-600 hover:bg-indigo-700 text-white font-semibold cursor-pointer shadow-xs"
+                  >
+                    <Sparkles className="w-3.5 h-3.5 mr-1.5" />
+                    <span>Fazer Upgrade para Plano Team (R$ 9,90/usuário)</span>
+                  </Button>
+                </div>
+              )}
+            </div>
+          ) : planLimits?.limit_reached ? (
             <div className="p-3.5 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/50 rounded-xl flex items-start gap-3 text-xs text-amber-800 dark:text-amber-200">
               <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
               <div className="space-y-1">
                 <p className="font-semibold">Limite de usuários atingido para o plano {planLimits.plan_name}</p>
                 <p className="text-2xs text-amber-700 dark:text-amber-300">
-                  Para adicionar novos membros à equipe, faça upgrade para o plano Pro (até 5 usuários) ou Team (ilimitado).
+                  Cada usuário adicional no plano Team é faturado a R$ 9,90/mês.
                 </p>
                 {onNavigateToBilling && (
                   <button
@@ -277,7 +311,7 @@ export function TeamMembersSettingsTab({
                     onClick={onNavigateToBilling}
                     className="inline-flex items-center gap-1 font-bold text-indigo-600 dark:text-indigo-400 hover:underline pt-1 cursor-pointer"
                   >
-                    Ver planos disponíveis &rarr;
+                    Ver cobrança &rarr;
                   </button>
                 )}
               </div>

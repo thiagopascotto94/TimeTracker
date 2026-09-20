@@ -43,17 +43,17 @@ export interface PlanPricingInfo {
 export const PLAN_PRICING: Record<string, PlanPricingInfo> = {
   pro: {
     id: 'pro',
-    name: 'Cronos Pro',
-    monthlyAmount: 2900, // R$ 29,00
-    yearlyAmount: 29000, // R$ 290,00
+    name: 'Cronos Pro (Individual)',
+    monthlyAmount: 499, // R$ 4,99
+    yearlyAmount: 4990, // R$ 49,90
     priceIdMonthly: process.env.STRIPE_PRICE_PRO_MONTHLY,
     priceIdYearly: process.env.STRIPE_PRICE_PRO_YEARLY,
   },
   team: {
     id: 'team',
-    name: 'Cronos Team',
-    monthlyAmount: 7900, // R$ 79,00
-    yearlyAmount: 79000, // R$ 790,00
+    name: 'Cronos Team (por usuário)',
+    monthlyAmount: 990, // R$ 9,90 por usuário/mês
+    yearlyAmount: 9900, // R$ 99,00 por usuário/ano
     priceIdMonthly: process.env.STRIPE_PRICE_TEAM_MONTHLY,
     priceIdYearly: process.env.STRIPE_PRICE_TEAM_YEARLY,
   },
@@ -134,6 +134,7 @@ export async function createStripeCheckoutSession(params: {
   planId: 'pro' | 'team';
   interval: 'monthly' | 'yearly';
   appUrl: string;
+  seats?: number;
 }): Promise<{ sessionId: string; url: string }> {
   const stripe = getStripe();
   if (!stripe) {
@@ -153,15 +154,20 @@ export async function createStripeCheckoutSession(params: {
   });
 
   const priceId = params.interval === 'yearly' ? pricing.priceIdYearly : pricing.priceIdMonthly;
+  const quantity = params.planId === 'team' ? Math.max(1, params.seats || 1) : 1;
 
   let lineItems: Stripe.Checkout.SessionCreateParams.LineItem[];
 
   if (priceId && priceId.trim()) {
-    lineItems = [{ price: priceId.trim(), quantity: 1 }];
+    lineItems = [{ price: priceId.trim(), quantity }];
   } else {
     // Criação dinâmica de preço no Stripe (não exige configuração prévia no dashboard)
     const unitAmount = params.interval === 'yearly' ? pricing.yearlyAmount : pricing.monthlyAmount;
     const intervalName = params.interval === 'yearly' ? 'year' : 'month';
+    const planDesc =
+      params.planId === 'team'
+        ? `Assinatura ${params.interval === 'yearly' ? 'anual' : 'mensal'} do plano Cronos Team para ${quantity} usuário(s)/membro(s) (${params.interval === 'yearly' ? 'R$ 99,00' : 'R$ 9,90'} por usuário)`
+        : `Assinatura recorrente individual ${params.interval === 'yearly' ? 'anual' : 'mensal'} do plano Cronos Pro (R$ 4,99/mês)`;
 
     lineItems = [
       {
@@ -169,14 +175,14 @@ export async function createStripeCheckoutSession(params: {
           currency: 'brl',
           product_data: {
             name: `${pricing.name} (${params.interval === 'yearly' ? 'Anual' : 'Mensal'})`,
-            description: `Assinatura recorrente ${params.interval === 'yearly' ? 'anual' : 'mensal'} do plano ${pricing.name}`,
+            description: planDesc,
           },
           unit_amount: unitAmount,
           recurring: {
             interval: intervalName,
           },
         },
-        quantity: 1,
+        quantity,
       },
     ];
   }

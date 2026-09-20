@@ -1,6 +1,8 @@
 import { Router, Response } from 'express';
-import { Workspace, WorkspaceMember, User, Subscription, Plan } from '../db';
+import { Workspace, WorkspaceMember, User, Subscription, Plan, Tenant, Client, ClientContact, TimeSession, Task, SharedReport, Invoice } from '../db';
 import { authMiddleware, requireRole, AuthenticatedRequest } from '../auth';
+import { getTenantWorkspaceLockInfo, isWorkspaceLocked } from '../workspace-limits';
+import { cacheGet, cacheSet, cacheDel } from '../cache';
 
 export const workspacesRouter = Router();
 
@@ -12,26 +14,53 @@ workspacesRouter.get('/', async (req: AuthenticatedRequest, res: Response) => {
     const userId = req.userId!;
     const tenantId = req.tenantId!;
 
-    const memberships = await WorkspaceMember.findAll({
-      where: { user_id: userId },
-      include: [
-        {
-          model: Workspace,
-          as: 'Workspace',
-          where: { tenant_id: tenantId },
-          include: [
-            {
-              model: WorkspaceMember,
-              as: 'Members',
-            },
-          ],
-        },
-      ],
+    const cacheKey = `cronos:workspaces:${userId}:${tenantId}:${req.workspaceId || 'none'}`;
+    const cached = await cacheGet(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+
+    const [memberships, lockInfo] = await Promise.all([
+      WorkspaceMember.findAll({
+        where: { user_id: userId },
+        include: [
+          {
+            model: Workspace,
+            as: 'Workspace',
+            where: { tenant_id: tenantId },
+            include: [
+              {
+                model: WorkspaceMember,
+                as: 'Members',
+              },
+            ],
+          },
+        ],
+      }),
+      getTenantWorkspaceLockInfo(tenantId),
+    ]);
+
+    // Sort workspaces chronologically (first created is index 0)
+    const sortedMemberships = [...memberships].sort((a, b) => {
+      const timeA = a.Workspace ? new Date(a.Workspace.created_at).getTime() : 0;
+      const timeB = b.Workspace ? new Date(b.Workspace.created_at).getTime() : 0;
+      return timeA - timeB;
     });
 
-    const workspaces = memberships.map((m) => {
+    // Check effective active workspace: if current active is locked, fallback to first unlocked
+    let effectiveActiveId = req.workspaceId;
+    const lockedIds = Array.isArray(lockInfo?.lockedWorkspaceIds) ? lockInfo.lockedWorkspaceIds : [];
+    if (!effectiveActiveId || lockedIds.includes(effectiveActiveId)) {
+      effectiveActiveId = lockInfo?.firstUnlockedWorkspaceId || sortedMemberships[0]?.Workspace?.id;
+    }
+
+    const workspaces = sortedMemberships.map((m, index) => {
       const ws = m.Workspace!;
       const membersCount = ws.Members ? ws.Members.length : 0;
+      const lockData = lockInfo.workspaces.find((w) => w.id === ws.id);
+      const isLocked = lockData ? lockData.is_locked : false;
+      const lockReason = lockData ? lockData.lock_reason : null;
+
       return {
         id: ws.id,
         name: ws.name,
@@ -40,11 +69,38 @@ workspacesRouter.get('/', async (req: AuthenticatedRequest, res: Response) => {
         members_count: membersCount,
         created_at: ws.created_at,
         updated_at: ws.updated_at,
-        is_active: ws.id === req.workspaceId,
+        order_index: index,
+        is_locked: isLocked,
+        lock_reason: lockReason,
+        is_active: ws.id === effectiveActiveId,
       };
     });
 
-    return res.json({ workspaces, activeWorkspaceId: req.workspaceId });
+    const planId = lockInfo.planId;
+    const planName = lockInfo.planName;
+    const maxWorkspaces = lockInfo.maxWorkspaces;
+    const currentCount = workspaces.length;
+    const canCreateMore = maxWorkspaces === -1 || currentCount < maxWorkspaces;
+
+    const payload = {
+      workspaces,
+      activeWorkspaceId: effectiveActiveId,
+      plan: {
+        id: planId,
+        name: planName,
+        max_workspaces: maxWorkspaces,
+      },
+      usage: {
+        workspaces_count: currentCount,
+        max_workspaces: maxWorkspaces,
+        can_create: canCreateMore,
+        locked_count: lockInfo.lockedWorkspaceIds.length,
+        unlocked_count: lockInfo.unlockedWorkspaceIds.length,
+      },
+    };
+
+    await cacheSet(cacheKey, payload, 30);
+    return res.json(payload);
   } catch (error) {
     console.error('Error listing workspaces:', error);
     res.status(500).json({ error: 'Erro ao listar workspaces' });
@@ -72,7 +128,8 @@ workspacesRouter.post('/', async (req: AuthenticatedRequest, res: Response) => {
     const currentCount = await Workspace.count({ where: { tenant_id: tenantId } });
     if (maxWorkspaces !== -1 && currentCount >= maxWorkspaces) {
       return res.status(403).json({
-        error: `Limite de workspaces (${maxWorkspaces}) atingido para o seu plano atual. Faça upgrade para criar mais workspaces.`,
+        error: `O plano Free permite apenas 1 workspace. Faça upgrade para o plano Pro para criar múltiplos workspaces.`,
+        plan_limit_exceeded: true,
       });
     }
 
@@ -87,6 +144,8 @@ workspacesRouter.post('/', async (req: AuthenticatedRequest, res: Response) => {
       user_id: userId,
       role: 'owner',
     });
+
+    await cacheDel('cronos:workspaces:*');
 
     return res.status(201).json({
       workspace: {
@@ -117,15 +176,18 @@ workspacesRouter.get('/:id', async (req: AuthenticatedRequest, res: Response) =>
       return res.status(403).json({ error: 'Acesso negado a este workspace' });
     }
 
-    const workspace = await Workspace.findByPk(id, {
-      include: [
-        {
-          model: WorkspaceMember,
-          as: 'Members',
-          include: [{ model: User, as: 'User', attributes: ['id', 'name', 'email', 'role'] }],
-        },
-      ],
-    });
+    const [workspace, lockCheck] = await Promise.all([
+      Workspace.findByPk(id, {
+        include: [
+          {
+            model: WorkspaceMember,
+            as: 'Members',
+            include: [{ model: User, as: 'User', attributes: ['id', 'name', 'email', 'role'] }],
+          },
+        ],
+      }),
+      isWorkspaceLocked(id, req.tenantId!),
+    ]);
 
     if (!workspace) {
       return res.status(404).json({ error: 'Workspace não encontrado' });
@@ -136,6 +198,18 @@ workspacesRouter.get('/:id', async (req: AuthenticatedRequest, res: Response) =>
         id: workspace.id,
         name: workspace.name,
         description: workspace.description,
+        is_locked: lockCheck.isLocked,
+        lock_reason: lockCheck.reason,
+        git_provider: workspace.git_provider || 'github',
+        github_repo: workspace.github_repo,
+        github_token: workspace.github_token,
+        gitlab_url: workspace.gitlab_url || 'https://gitlab.com',
+        gitlab_project: workspace.gitlab_project,
+        gitlab_token: workspace.gitlab_token,
+        allowed_repositories: workspace.allowed_repositories,
+        default_target_minutes: workspace.default_target_minutes ?? 60,
+        default_client_daily_target_minutes: workspace.default_client_daily_target_minutes ?? 120,
+        monthly_billing_goal: workspace.monthly_billing_goal ?? 10000.0,
         role: membership.role,
         members: workspace.Members?.map((m) => ({
           id: m.id,
@@ -157,19 +231,77 @@ workspacesRouter.get('/:id', async (req: AuthenticatedRequest, res: Response) =>
 workspacesRouter.put('/:id', requireRole('owner', 'admin'), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id } = req.params;
-    const { name, description } = req.body;
+
+    // Check if workspace is locked under plan
+    const lockCheck = await isWorkspaceLocked(id, req.tenantId!);
+    if (lockCheck.isLocked) {
+      return res.status(403).json({
+        error: 'Este workspace está bloqueado no plano Free. Apenas o primeiro workspace está liberado para qualquer tipo de edição.',
+        code: 'WORKSPACE_LOCKED',
+        is_locked: true,
+        reason: lockCheck.reason,
+      });
+    }
+
+    const {
+      name,
+      description,
+      default_target_minutes,
+      default_client_daily_target_minutes,
+      monthly_billing_goal,
+      git_provider,
+      github_repo,
+      github_token,
+      gitlab_url,
+      gitlab_project,
+      gitlab_token,
+      allowed_repositories,
+    } = req.body;
 
     const workspace = await Workspace.findByPk(id);
     if (!workspace) {
       return res.status(404).json({ error: 'Workspace não encontrado' });
     }
 
-    if (name && name.trim()) {
+    if (name !== undefined && name.trim()) {
       workspace.name = name.trim();
     }
     if (description !== undefined) {
       workspace.description = description ? description.trim() : null;
     }
+    if (default_target_minutes !== undefined) {
+      workspace.default_target_minutes = default_target_minutes !== null && default_target_minutes !== '' ? Number(default_target_minutes) : null;
+    }
+    if (default_client_daily_target_minutes !== undefined) {
+      workspace.default_client_daily_target_minutes = default_client_daily_target_minutes !== null && default_client_daily_target_minutes !== '' ? Number(default_client_daily_target_minutes) : null;
+    }
+    if (monthly_billing_goal !== undefined) {
+      workspace.monthly_billing_goal = monthly_billing_goal !== null && monthly_billing_goal !== '' ? Number(monthly_billing_goal) : null;
+    }
+    if (git_provider !== undefined) {
+      workspace.git_provider = git_provider === 'gitlab' ? 'gitlab' : 'github';
+    }
+    if (github_repo !== undefined) {
+      workspace.github_repo = typeof github_repo === 'string' ? github_repo.trim() || null : null;
+    }
+    if (github_token !== undefined) {
+      workspace.github_token = typeof github_token === 'string' ? github_token.trim() || null : null;
+    }
+    if (gitlab_url !== undefined) {
+      workspace.gitlab_url = typeof gitlab_url === 'string' ? gitlab_url.trim() || 'https://gitlab.com' : 'https://gitlab.com';
+    }
+    if (gitlab_project !== undefined) {
+      workspace.gitlab_project = typeof gitlab_project === 'string' ? gitlab_project.trim() || null : null;
+    }
+    if (gitlab_token !== undefined) {
+      workspace.gitlab_token = typeof gitlab_token === 'string' ? gitlab_token.trim() || null : null;
+    }
+    if (allowed_repositories !== undefined) {
+      workspace.allowed_repositories = typeof allowed_repositories === 'string'
+        ? allowed_repositories
+        : JSON.stringify(allowed_repositories || []);
+    }
+
     await workspace.save();
 
     return res.json({
@@ -177,6 +309,16 @@ workspacesRouter.put('/:id', requireRole('owner', 'admin'), async (req: Authenti
         id: workspace.id,
         name: workspace.name,
         description: workspace.description,
+        git_provider: workspace.git_provider,
+        github_repo: workspace.github_repo,
+        github_token: workspace.github_token,
+        gitlab_url: workspace.gitlab_url,
+        gitlab_project: workspace.gitlab_project,
+        gitlab_token: workspace.gitlab_token,
+        allowed_repositories: workspace.allowed_repositories,
+        default_target_minutes: workspace.default_target_minutes,
+        default_client_daily_target_minutes: workspace.default_client_daily_target_minutes,
+        monthly_billing_goal: workspace.monthly_billing_goal,
       },
       message: 'Workspace atualizado com sucesso',
     });
@@ -190,6 +332,16 @@ workspacesRouter.put('/:id', requireRole('owner', 'admin'), async (req: Authenti
 workspacesRouter.delete('/:id', requireRole('owner'), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id } = req.params;
+
+    const lockCheck = await isWorkspaceLocked(id, req.tenantId!);
+    if (lockCheck.isLocked) {
+      return res.status(403).json({
+        error: 'Este workspace está bloqueado no plano Free. Apenas o primeiro workspace está liberado para acesso e qualquer tipo de edição.',
+        code: 'WORKSPACE_LOCKED',
+        is_locked: true,
+        reason: lockCheck.reason,
+      });
+    }
 
     const workspace = await Workspace.findByPk(id);
     if (!workspace) {
@@ -249,6 +401,31 @@ workspacesRouter.get('/:id/members', async (req: AuthenticatedRequest, res: Resp
 workspacesRouter.post('/:id/members', requireRole('owner', 'admin'), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id } = req.params;
+
+    const lockCheck = await isWorkspaceLocked(id, req.tenantId!);
+    if (lockCheck.isLocked) {
+      return res.status(403).json({
+        error: 'Este workspace está bloqueado no plano Free. Apenas o primeiro workspace está liberado para qualquer tipo de edição.',
+        code: 'WORKSPACE_LOCKED',
+        is_locked: true,
+        reason: lockCheck.reason,
+      });
+    }
+
+    // Verify that the workspace is on the Team plan (Pro is individual and does not accept members)
+    const tenant = await Tenant.findByPk(req.tenantId!, {
+      include: [{ model: Plan, as: 'Plan' }],
+    });
+    const planId = tenant?.plan_id || tenant?.Plan?.id || 'free';
+    if (planId !== 'team') {
+      return res.status(403).json({
+        error: 'O plano Pro é de uso estritamente individual e não aceita membros adicionais. Faça upgrade para o plano Team (cobrado por usuário) para adicionar colaboradores ao seu workspace.',
+        code: 'FEATURE_REQUIRES_TEAM_PLAN',
+        upgrade_required: true,
+        plan: planId,
+      });
+    }
+
     const { email, role } = req.body;
     const currentRole = req.workspaceRole;
 
@@ -297,6 +474,17 @@ workspacesRouter.post('/:id/members', requireRole('owner', 'admin'), async (req:
 workspacesRouter.delete('/:id/members/:targetUserId', requireRole('owner', 'admin'), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id, targetUserId } = req.params;
+
+    const lockCheck = await isWorkspaceLocked(id, req.tenantId!);
+    if (lockCheck.isLocked) {
+      return res.status(403).json({
+        error: 'Este workspace está bloqueado no plano Free. Apenas o primeiro workspace está liberado para qualquer tipo de edição.',
+        code: 'WORKSPACE_LOCKED',
+        is_locked: true,
+        reason: lockCheck.reason,
+      });
+    }
+
     const currentRole = req.workspaceRole;
     const currentUserId = req.userId!;
 
@@ -319,5 +507,230 @@ workspacesRouter.delete('/:id/members/:targetUserId', requireRole('owner', 'admi
   } catch (error) {
     console.error('Error removing member:', error);
     res.status(500).json({ error: 'Erro ao remover membro' });
+  }
+});
+
+/**
+ * GET /api/workspaces/:id/export - Export full workspace data
+ * Exclusively available for Pro and Team plans
+ */
+workspacesRouter.get('/:id/export', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const tenantId = req.tenantId!;
+    const userId = req.userId!;
+
+    // 1. Verify plan restriction (Pro and Team only)
+    const tenant = await Tenant.findByPk(tenantId, {
+      include: [{ model: Plan, as: 'Plan' }],
+    });
+    const planId = tenant?.plan_id || tenant?.Plan?.id || 'free';
+    if (planId === 'free') {
+      return res.status(403).json({
+        error: 'A exportação completa dos dados do workspace é um recurso exclusivo dos planos Pro e Team.',
+        code: 'FEATURE_LOCKED_PLAN',
+        upgrade_required: true,
+        plan: 'free',
+      });
+    }
+
+    // 2. Fetch workspace with members
+    const workspace = await Workspace.findOne({
+      where: { id, tenant_id: tenantId },
+      include: [
+        {
+          model: WorkspaceMember,
+          as: 'Members',
+          include: [{ model: User, as: 'User', attributes: ['id', 'name', 'email', 'role'] }],
+        },
+      ],
+    });
+
+    if (!workspace) {
+      return res.status(404).json({ error: 'Workspace não encontrado' });
+    }
+
+    // 3. Fetch all associated data
+    const [clients, timeSessions, tasks, sharedReports, invoices, currentUser] = await Promise.all([
+      Client.findAll({
+        where: { tenant_id: tenantId },
+        include: [{ model: ClientContact, as: 'Contacts' }],
+        order: [['name', 'ASC']],
+      }),
+      TimeSession.findAll({
+        where: { tenant_id: tenantId },
+        order: [['start_time', 'DESC']],
+      }),
+      Task.findAll({
+        where: { tenant_id: tenantId },
+        order: [['created_at', 'DESC']],
+      }),
+      SharedReport.findAll({
+        where: { tenant_id: tenantId },
+        order: [['created_at', 'DESC']],
+      }),
+      Invoice.findAll({
+        where: { tenant_id: tenantId },
+        order: [['created_at', 'DESC']],
+      }),
+      User.findByPk(userId, { attributes: ['id', 'name', 'email'] }),
+    ]);
+
+    const calcDurationSeconds = (s: any) => {
+      const start = s.start_time ? new Date(s.start_time).getTime() : Date.now();
+      const end = s.end_time ? new Date(s.end_time).getTime() : Date.now();
+      return Math.max(0, Math.floor((end - start) / 1000));
+    };
+
+    const totalDurationSeconds = timeSessions.reduce((acc, s) => acc + calcDurationSeconds(s), 0);
+    const totalDurationHours = Number((totalDurationSeconds / 3600).toFixed(2));
+
+    const exportPayload = {
+      export_metadata: {
+        format: 'cronos_workspace_export',
+        version: '1.0',
+        exported_at: new Date().toISOString(),
+        exported_by: currentUser
+          ? {
+              id: currentUser.id,
+              name: currentUser.name,
+              email: currentUser.email,
+            }
+          : null,
+        workspace_info: {
+          id: workspace.id,
+          name: workspace.name,
+          description: workspace.description,
+        },
+        tenant: {
+          id: tenant?.id,
+          name: tenant?.name,
+          plan: planId,
+        },
+        summary: {
+          total_clients: clients.length,
+          total_sessions: timeSessions.length,
+          total_duration_hours: totalDurationHours,
+          total_tasks: tasks.length,
+          total_invoices: invoices.length,
+          total_shared_reports: sharedReports.length,
+          total_members: workspace.Members?.length || 1,
+        },
+      },
+      workspace: {
+        id: workspace.id,
+        name: workspace.name,
+        description: workspace.description,
+        git_provider: workspace.git_provider,
+        github_repo: workspace.github_repo,
+        gitlab_url: workspace.gitlab_url,
+        gitlab_project: workspace.gitlab_project,
+        allowed_repositories: workspace.allowed_repositories,
+        default_target_minutes: workspace.default_target_minutes,
+        default_client_daily_target_minutes: workspace.default_client_daily_target_minutes,
+        monthly_billing_goal: workspace.monthly_billing_goal,
+        created_at: (workspace as any).created_at,
+        updated_at: (workspace as any).updated_at,
+      },
+      members: (workspace.Members || []).map((m: any) => ({
+        id: m.id,
+        role: m.role,
+        user: m.User ? { id: m.User.id, name: m.User.name, email: m.User.email } : null,
+        created_at: m.created_at,
+      })),
+      clients: clients.map((c) => ({
+        id: c.id,
+        name: c.name,
+        company: c.company,
+        email: c.email,
+        hourly_rate: c.hourly_rate,
+        daily_target_minutes: c.daily_target_minutes,
+        notes: c.notes,
+        git_provider: c.git_provider,
+        github_repo: c.github_repo,
+        gitlab_url: c.gitlab_url,
+        gitlab_project: c.gitlab_project,
+        created_at: (c as any).created_at,
+      })),
+      time_sessions: timeSessions.map((s) => ({
+        id: s.id,
+        client_id: s.client_id,
+        title: s.title,
+        notes: s.notes,
+        start_time: s.start_time,
+        end_time: s.end_time,
+        duration_seconds: calcDurationSeconds(s),
+        target_minutes: s.target_minutes,
+        hourly_rate: s.hourly_rate,
+        is_locked: s.is_locked,
+        locked_at: s.locked_at,
+        locked_reason: s.locked_reason,
+        created_at: (s as any).created_at,
+      })),
+      tasks: tasks.map((t) => ({
+        id: t.id,
+        time_session_id: t.time_session_id,
+        description: t.description,
+        notes: t.notes,
+        link: t.link,
+        created_at: (t as any).created_at,
+      })),
+      shared_reports: sharedReports.map((r) => ({
+        id: r.id,
+        client_id: r.client_id,
+        title: r.title,
+        token: r.token,
+        start_date: r.start_date,
+        end_date: r.end_date,
+        session_id: r.session_id,
+        hourly_rate: r.hourly_rate,
+        include_cost: r.include_cost,
+        allow_approval: r.allow_approval,
+        status: r.status,
+        approved_by: r.approved_by,
+        approved_at: r.approved_at,
+        created_at: (r as any).created_at,
+      })),
+      invoices: invoices.map((inv) => ({
+        id: inv.id,
+        amount: inv.amount,
+        currency: inv.currency,
+        status: inv.status,
+        billing_reason: inv.billing_reason,
+        paid_at: inv.paid_at,
+        created_at: inv.created_at,
+      })),
+    };
+
+    const safeName = (workspace.name || 'workspace').toLowerCase().replace(/[^a-z0-9_-]/gi, '_');
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const filename = `cronos-workspace-${safeName}-${dateStr}.json`;
+
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return res.status(200).send(JSON.stringify(exportPayload, null, 2));
+  } catch (error) {
+    console.error('Error exporting workspace data:', error);
+    return res.status(500).json({ error: 'Erro ao processar exportação completa do workspace' });
+  }
+});
+
+/**
+ * GET /api/workspaces/export - Export first/current workspace of tenant
+ */
+workspacesRouter.get('/export', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const tenantId = req.tenantId!;
+    const firstWs = await Workspace.findOne({
+      where: { tenant_id: tenantId },
+      order: [['created_at', 'ASC']],
+    });
+    if (!firstWs) {
+      return res.status(404).json({ error: 'Nenhum workspace encontrado' });
+    }
+    return res.redirect(`/api/workspaces/${firstWs.id}/export`);
+  } catch (error) {
+    console.error('Error redirecting to workspace export:', error);
+    return res.status(500).json({ error: 'Erro ao localizar workspace para exportação' });
   }
 });

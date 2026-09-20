@@ -1,7 +1,8 @@
 import { Router, Request, Response } from 'express';
 import { authMiddleware, AuthenticatedRequest } from '../auth';
 import { getTenantBillingStatus } from '../billing';
-import { Plan, Subscription, Tenant, User, Invoice } from '../db';
+import { Plan, Subscription, Tenant, User, Invoice, Invite } from '../db';
+import { cacheGet, cacheSet, cacheDel } from '../cache';
 import {
   getStripe,
   isStripeConfigured,
@@ -120,7 +121,7 @@ billingRouter.post('/webhook', async (req: Request, res: Response) => {
           }
 
           // Registra fatura correspondente
-          const amountPaid = session.amount_total ? session.amount_total / 100 : (planId === 'pro' ? 29.0 : 79.0);
+          const amountPaid = session.amount_total ? session.amount_total / 100 : (planId === 'pro' ? 4.99 : 9.90);
           await Invoice.create({
             tenant_id: tenantId,
             subscription_id: subscription.id,
@@ -270,6 +271,8 @@ billingRouter.post('/webhook', async (req: Request, res: Response) => {
         console.log(`[Stripe Webhook] Evento não tratado: ${event.type}`);
     }
 
+    await cacheDel('cronos:billing:status:*');
+
     return res.json({ received: true });
   } catch (err: any) {
     console.error('Erro ao processar webhook do Stripe:', err);
@@ -290,7 +293,14 @@ billingRouter.get('/status', async (req: AuthenticatedRequest, res: Response) =>
       return res.status(401).json({ error: 'Tenant não autenticado' });
     }
 
+    const cacheKey = `cronos:billing:status:${tenantId}`;
+    const cached = await cacheGet(cacheKey);
+    if (cached) {
+      return res.json(cached);
+    }
+
     const billingStatus = await getTenantBillingStatus(tenantId);
+    await cacheSet(cacheKey, billingStatus, 30);
     return res.json(billingStatus);
   } catch (err: any) {
     console.error('Error fetching billing status:', err);
@@ -396,6 +406,13 @@ billingRouter.post('/create-checkout-session', async (req: AuthenticatedRequest,
       `${req.protocol}://${req.get('host')}` ||
       'http://localhost:3000';
 
+    // Calculate total seats (active members + pending invites) in this workspace
+    const usersCount = await User.count({ where: { tenant_id: tenantId } });
+    const pendingInvitesCount = await Invite.count({
+      where: { tenant_id: tenantId, status: 'pending' },
+    });
+    const totalSeats = Math.max(1, usersCount + pendingInvitesCount);
+
     if (isStripeConfigured()) {
       // Cria checkout real via Stripe Checkout
       const { sessionId, url } = await createStripeCheckoutSession({
@@ -407,6 +424,7 @@ billingRouter.post('/create-checkout-session', async (req: AuthenticatedRequest,
         planId: plan_id,
         interval: interval === 'yearly' ? 'yearly' : 'monthly',
         appUrl,
+        seats: totalSeats,
       });
 
       return res.json({
@@ -460,13 +478,16 @@ billingRouter.post('/create-checkout-session', async (req: AuthenticatedRequest,
         });
       }
 
-      // Cria fatura correspondente
-      const price = interval === 'yearly' ? targetPlan.price_yearly : targetPlan.price_monthly;
+      // Cria fatura correspondente (calculada com base no número de assentos para o plano Team)
+      const baseUnitPrice = interval === 'yearly' ? targetPlan.price_yearly : targetPlan.price_monthly;
+      const calculatedPrice =
+        plan_id === 'team' ? Number((baseUnitPrice * totalSeats).toFixed(2)) : baseUnitPrice;
+
       await Invoice.create({
         tenant_id: tenantId,
         subscription_id: subscription.id,
         gateway_invoice_id: `inv_sim_${Date.now().toString().slice(-6)}`,
-        amount: price,
+        amount: calculatedPrice,
         currency: 'brl',
         status: 'paid',
         billing_reason: 'subscription_create',
@@ -475,6 +496,7 @@ billingRouter.post('/create-checkout-session', async (req: AuthenticatedRequest,
         period_end: periodEnd,
       });
 
+      await cacheDel('cronos:billing:status:*');
       const updatedStatus = await getTenantBillingStatus(tenantId);
       return res.json({
         url: null,
@@ -535,6 +557,7 @@ billingRouter.post('/cancel-subscription', async (req: AuthenticatedRequest, res
       immediately: Boolean(immediately),
     });
 
+    await cacheDel('cronos:billing:status:*');
     const updatedStatus = await getTenantBillingStatus(tenantId);
     return res.json({
       message: immediately
@@ -558,6 +581,7 @@ billingRouter.post('/reactivate-subscription', async (req: AuthenticatedRequest,
     }
 
     const result = await reactivateStripeSubscription({ tenantId });
+    await cacheDel('cronos:billing:status:*');
     const updatedStatus = await getTenantBillingStatus(tenantId);
 
     return res.json({
@@ -580,6 +604,7 @@ billingRouter.post('/sync', async (req: AuthenticatedRequest, res: Response) => 
     }
 
     await syncSubscriptionWithStripe(tenantId);
+    await cacheDel('cronos:billing:status:*');
     const updatedStatus = await getTenantBillingStatus(tenantId);
 
     return res.json({
@@ -651,6 +676,7 @@ billingRouter.post('/change-plan', async (req: AuthenticatedRequest, res: Respon
       });
     }
 
+    await cacheDel('cronos:billing:status:*');
     const updatedStatus = await getTenantBillingStatus(tenantId);
     return res.json({
       message: `Plano alterado com sucesso para ${targetPlan.name}`,
@@ -698,11 +724,19 @@ billingRouter.post('/simulate-webhook', async (req: AuthenticatedRequest, res: R
         await subscription.save();
       }
 
+      const simUsersCount = await User.count({ where: { tenant_id: tenantId } });
+      const simPendingInvitesCount = await Invite.count({
+        where: { tenant_id: tenantId, status: 'pending' },
+      });
+      const simTotalSeats = Math.max(1, simUsersCount + simPendingInvitesCount);
+      const simCalculatedAmount =
+        plan_id === 'team' ? Number((simTotalSeats * 9.90).toFixed(2)) : 4.99;
+
       await Invoice.create({
         tenant_id: tenantId,
         subscription_id: subscription?.id || null,
         gateway_invoice_id: `inv_sim_${Date.now().toString().slice(-6)}`,
-        amount: plan_id === 'team' ? 79.0 : 29.0,
+        amount: simCalculatedAmount,
         currency: 'brl',
         status: 'paid',
         billing_reason: 'subscription_cycle',

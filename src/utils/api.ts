@@ -97,6 +97,22 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
     }
   }
 
+  if (res.status === 403 && typeof window !== 'undefined') {
+    try {
+      const cloned = res.clone();
+      cloned.json().then((data) => {
+        if (data && data.code === 'WORKSPACE_LOCKED') {
+          // If the currently saved workspace is locked, remove stale ID and trigger reset
+          localStorage.removeItem('cronos_active_workspace_id');
+          window.dispatchEvent(new CustomEvent('workspace-locked-detected', { detail: data }));
+          window.dispatchEvent(new CustomEvent('workspace-changed', { detail: {} }));
+        }
+      }).catch(() => {});
+    } catch {
+      // ignore json/clone errors
+    }
+  }
+
   return res;
 }
 
