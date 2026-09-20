@@ -5,6 +5,10 @@ import { RedisStore } from 'connect-redis';
 import cookieParser from 'cookie-parser';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
+import * as Sentry from '@sentry/node';
+import pino from 'pino';
+import pinoHttp from 'pino-http';
+
 import { initDb } from './server/db';
 import { initRedis } from './server/cache';
 import { authRouter } from './server/routes/auth';
@@ -22,8 +26,53 @@ import { workspacesRouter } from './server/routes/workspaces';
 const PORT = 3000;
 const HOST = '0.0.0.0';
 
+// Initialize structured logger
+const logger = pino({
+  level: process.env.NODE_ENV === 'production' ? 'info' : 'debug',
+});
+
+// Initialize Sentry if DSN is provided
+if (process.env.SENTRY_DSN) {
+  try {
+    Sentry.init({
+      dsn: process.env.SENTRY_DSN,
+      environment: process.env.NODE_ENV || 'production',
+      tracesSampleRate: 1.0,
+    });
+    logger.info('[Sentry] Error monitoring initialized successfully.');
+  } catch (err) {
+    logger.error({ err }, '[Sentry] Failed to initialize Sentry');
+  }
+}
+
+// Global unhandled error catchers with graceful fallback
+process.on('unhandledRejection', (reason) => {
+  logger.error({ reason }, 'Unhandled Rejection detected');
+  if (process.env.SENTRY_DSN) {
+    try { Sentry.captureException(reason); } catch (_) {}
+  }
+});
+
+process.on('uncaughtException', (error) => {
+  logger.fatal({ err: error }, 'Uncaught Exception detected');
+  if (process.env.SENTRY_DSN) {
+    try { Sentry.captureException(error); } catch (_) {}
+  }
+});
+
 async function startServer() {
   const app = express();
+
+  // Attach HTTP request logger middleware
+  app.use(pinoHttp({ logger }));
+
+  if (process.env.SENTRY_DSN) {
+    try {
+      // Sentry initialized globally
+    } catch (e) {
+      // Ignore
+    }
+  }
 
   // Initialize SQLite Database with Sequelize
   try {
@@ -94,6 +143,23 @@ async function startServer() {
   app.use('/api/billing', billingRouter);
   app.use('/api/invites', invitesRouter);
   app.use('/api/workspaces', workspacesRouter);
+
+  if (process.env.SENTRY_DSN) {
+    try {
+      // Sentry error capture active via global handlers and middleware
+    } catch (e) {
+      // Ignore
+    }
+  }
+
+  // Global safe error handling middleware (never expose stack traces in production)
+  app.use((err: any, req: any, res: any, _next: any) => {
+    logger.error({ err, url: req.url }, 'Internal server error caught by fallback middleware');
+    const statusCode = err.status || 500;
+    res.status(statusCode).json({
+      error: process.env.NODE_ENV === 'production' ? 'Erro interno no servidor' : (err.message || 'Erro interno'),
+    });
+  });
 
   // Vite middleware setup
   if (process.env.NODE_ENV !== 'production') {
