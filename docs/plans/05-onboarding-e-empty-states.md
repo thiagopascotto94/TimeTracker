@@ -27,10 +27,10 @@
   - Paleta neutra sofisticada, com botões de ação proeminentes.
 
 ## 4. Checklist de Implementação
-- [ ] Criar componente genérico e reutilizável `EmptyState.tsx` em `src/components/ui/`.
-- [ ] Criar `OnboardingChecklist.tsx` com detecção automática do estado da conta (se já possui clientes cadastrados e sessões existentes).
-- [ ] Adicionar botão para fechar/ocultar permanentemente o checklist de onboarding caso o usuário prefira.
-- [ ] Substituir mensagens textuais secas nas abas principais pelos novos Empty States.
+- [x] Criar componente genérico e reutilizável `EmptyState.tsx` em `src/components/ui/`.
+- [x] Criar `OnboardingChecklist.tsx` com detecção automática do estado da conta (se já possui clientes cadastrados e sessões existentes).
+- [x] Adicionar botão para fechar/ocultar permanentemente o checklist de onboarding caso o usuário prefira.
+- [x] Substituir mensagens textuais secas nas abas principais pelos novos Empty States.
 
 ## 5. Critérios de Aceite
 1. Um usuário recém-criado entende o próximo passo em menos de 5 segundos ao olhar para a tela.

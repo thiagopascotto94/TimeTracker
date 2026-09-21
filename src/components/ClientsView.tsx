@@ -19,6 +19,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './ui/
 import { Button } from './ui/button';
 import { useToast } from './ui/toast';
 import { Dialog } from './ui/dialog';
+import { EmptyState } from './ui/empty-state';
 import { apiFetch } from '../utils/api';
 
 interface ClientsViewProps {
@@ -79,20 +80,13 @@ export function ClientsView({
       </div>
 
       {clients.length === 0 ? (
-        <Card className="border border-dashed border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 p-12 text-center">
-          <div className="flex flex-col items-center justify-center space-y-3">
-            <div className="w-12 h-12 rounded-full bg-indigo-50 dark:bg-indigo-950/50 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
-              <Briefcase className="w-6 h-6" />
-            </div>
-            <h3 className="text-base font-semibold text-neutral-900 dark:text-neutral-100">Nenhum cliente cadastrado</h3>
-            <p className="text-xs text-neutral-500 dark:text-neutral-400 max-w-sm">
-              Cadastre seu primeiro cliente para organizar suas horas trabalhadas e faturamento por projeto.
-            </p>
-            <Button onClick={onNavigateToNewClient} variant="outline" size="sm" className="mt-2 cursor-pointer text-xs">
-              Cadastrar Primeiro Cliente
-            </Button>
-          </div>
-        </Card>
+        <EmptyState
+          icon={Briefcase}
+          title="Nenhum cliente cadastrado"
+          description="Cadastre seu primeiro cliente para organizar suas horas trabalhadas, projetos e faturamento."
+          actionLabel="Cadastrar Primeiro Cliente"
+          onAction={onNavigateToNewClient}
+        />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {clients.map((client) => {

@@ -24,10 +24,10 @@
   - Respeita a regra de permissão: valores financeiros (`hourly_rate` e faturamento acumulado) só aparecem para quem tem `can_view_billing === true`. Membros comuns veem apenas o tempo e o projeto.
 
 ## 4. Checklist de Implementação
-- [ ] Criar endpoint no backend com cache leve e query otimizada em `TimeSession`.
-- [ ] Desenvolver `TeamPulseWidget.tsx` com microanimações e avatares visuais.
-- [ ] Adicionar filtro rápido no *Histórico*: clicar no avatar de um membro filtra imediatamente o histórico por aquele usuário.
-- [ ] Implementar verificação se o workspace possui mais de 1 membro antes de exibir o widget.
+- [x] Criar endpoint no backend com cache leve e query otimizada em `TimeSession`.
+- [x] Desenvolver `TeamPulseWidget.tsx` com microanimações e avatares visuais.
+- [x] Adicionar filtro rápido no *Histórico*: clicar no avatar de um membro filtra imediatamente o histórico por aquele usuário.
+- [x] Implementar verificação se o workspace possui mais de 1 membro antes de exibir o widget.
 
 ## 5. Critérios de Aceite
 1. Quando um membro da equipe inicia o timer, outros membros com acesso ao workspace veem o status atualizado.

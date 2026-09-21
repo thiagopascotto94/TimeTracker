@@ -38,6 +38,7 @@ import { Input } from './ui/input';
 import { useToast } from './ui/toast';
 import { Dialog } from './ui/dialog';
 import { ClientFilterAutocomplete } from './ClientFilterAutocomplete';
+import { EmptyState } from './ui/empty-state';
 import { apiFetch } from '../utils/api';
 
 interface EditTaskItem {
@@ -344,8 +345,16 @@ export function HistoryView({
 
         <CardContent className="p-0">
           {filteredSessions.length === 0 ? (
-            <div className="py-12 text-center text-xs text-neutral-400 dark:text-neutral-500">
-              Nenhuma sessão encontrada para o filtro selecionado.
+            <div className="p-6">
+              <EmptyState
+                icon={Clock}
+                title="Nenhuma sessão encontrada"
+                description={
+                  sessions.length === 0
+                    ? "Você ainda não registrou nenhuma sessão de tempo. Inicie o timer para começar a registrar seu progresso."
+                    : "Nenhuma sessão corresponde aos filtros de pesquisa ou cliente selecionados."
+                }
+              />
             </div>
           ) : (
             <div className="divide-y divide-neutral-100 dark:divide-neutral-800">

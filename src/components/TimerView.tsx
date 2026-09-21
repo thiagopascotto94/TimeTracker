@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import {
   Play,
   Square,
@@ -43,6 +44,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './ui/
 import { ClientAutocomplete } from './ClientAutocomplete';
 import { Badge } from './ui/badge';
 import { Dialog } from './ui/dialog';
+import { TeamPulseWidget } from './TeamPulseWidget';
+import { OnboardingChecklist } from './OnboardingChecklist';
 import { useToast } from './ui/toast';
 import { apiFetch } from '../utils/api';
 import { GitCommitModal } from './GitCommitModal';
@@ -74,6 +77,7 @@ interface TimerViewProps {
   currentUserId?: string;
   addToast?: (toast: { title: string; description: string; variant?: 'success' | 'destructive' | 'default' | 'amber' }) => void;
   onClientCreated?: (client: Client) => void;
+  onNavigate?: (tab: 'clients' | 'reports' | 'timer' | 'settings') => void;
 }
 
 export function TimerView({
@@ -97,6 +101,7 @@ export function TimerView({
   currentUserId,
   addToast: parentAddToast,
   onClientCreated,
+  onNavigate,
 }: TimerViewProps) {
   const { addToast } = useToast();
   const effectiveAddToast = parentAddToast || addToast;
@@ -152,6 +157,9 @@ export function TimerView({
   });
   const [customTarget, setCustomTarget] = useState('');
   const [clientId, setClientId] = useState<string>('');
+  const [isAdvancedOpen, setIsAdvancedOpen] = useState(
+    Boolean(targetMinutes || customTarget || resumeSession)
+  );
 
   // Synchronize workspace default target when tenant loads/changes
   useEffect(() => {
@@ -478,6 +486,13 @@ export function TimerView({
 
   return (
     <div className="space-y-6">
+      <OnboardingChecklist
+        clientsCount={clients.length}
+        sessionsCount={sessions.length}
+        onNavigate={onNavigate || (() => {})}
+      />
+      <TeamPulseWidget />
+
       {/* ACTIVE TIMER RUNNING */}
       {activeSession ? (
         <div className="space-y-6">
@@ -1174,93 +1189,8 @@ export function TimerView({
                 />
               </div>
 
-              {/* Target Minutes (RF04) */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-semibold text-neutral-700 dark:text-neutral-300 flex items-center gap-1.5">
-                    <Target className="w-4 h-4 text-amber-600 dark:text-amber-400" />
-                    <span>Objetivo de Tempo (Alerta quando atingido)</span>
-                  </label>
-                  <span className="text-xs font-semibold text-neutral-700 dark:text-neutral-300">
-                    {customTarget
-                      ? `${customTarget} minutos`
-                      : targetMinutes
-                      ? `${targetMinutes} minutos (${targetMinutes / 60}h)`
-                      : 'Sem objetivo'}
-                  </span>
-                </div>
-
-                {/* Quick preset chips */}
-                <div className="flex flex-wrap gap-2">
-                  {[
-                    { label: 'Sem meta', val: null },
-                    { label: '15m', val: 15 },
-                    { label: '30m', val: 30 },
-                    { label: '1 hora', val: 60 },
-                    { label: '2 horas', val: 120 },
-                    { label: '4 horas', val: 240 },
-                  ].map((preset) => {
-                    const isSelected =
-                      !customTarget && targetMinutes === preset.val;
-                    return (
-                      <button
-                        key={preset.label}
-                        type="button"
-                        onClick={() => {
-                          setCustomTarget('');
-                          setTargetMinutes(preset.val);
-                        }}
-                        className={`px-3.5 py-2 text-xs font-bold rounded-lg border transition-colors cursor-pointer ${
-                          isSelected
-                            ? 'border-neutral-900 dark:border-neutral-100 bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 shadow-xs'
-                            : 'border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 hover:bg-neutral-100 dark:hover:bg-neutral-800'
-                        }`}
-                      >
-                        {preset.label}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {/* Custom Target Input */}
-                <div className="flex items-center gap-2 pt-1">
-                  <span className="text-xs font-semibold text-neutral-700 dark:text-neutral-300">Ou digite em minutos:</span>
-                  <Input
-                    type="number"
-                    min="1"
-                    max="1440"
-                    placeholder="Ex: 45"
-                    value={customTarget}
-                    onChange={(e) => setCustomTarget(e.target.value)}
-                    className="w-28 text-xs font-medium h-9 text-neutral-900 dark:text-neutral-100"
-                  />
-                </div>
-              </div>
-
-              {/* Session Continuation Banner (Inherited from History "Continuar") */}
-              {resumeSession && (
-                <div className="flex items-center justify-between p-3.5 rounded-lg border border-indigo-200 dark:border-indigo-800 bg-indigo-50/80 dark:bg-indigo-950/60">
-                  <div className="flex items-center gap-2.5 text-xs text-indigo-900 dark:text-indigo-200">
-                    <Link2 className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
-                    <div>
-                      <span className="font-semibold block">Continuação da sessão anterior:</span>
-                      <span className="opacity-95 font-medium">{resumeSession.title} ({formatDateTime(resumeSession.start_time)})</span>
-                    </div>
-                  </div>
-                  {onClearResumeSession && (
-                    <button
-                      type="button"
-                      onClick={onClearResumeSession}
-                      className="text-xs font-medium text-indigo-700 dark:text-indigo-300 hover:underline cursor-pointer"
-                    >
-                      Remover Vínculo
-                    </button>
-                  )}
-                </div>
-              )}
-
               {/* Client Selection (Autocomplete with debounce) */}
-              <div className="space-y-2 pt-3 border-t border-neutral-200 dark:border-neutral-800">
+              <div className="space-y-2 pt-1">
                 <label className="text-xs font-semibold text-neutral-700 dark:text-neutral-300 flex items-center gap-1.5">
                   <Briefcase className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
                   <span>Vincular a Cliente / Projeto</span>
@@ -1308,6 +1238,111 @@ export function TimerView({
                   </div>
                 ) : null}
               </div>
+
+              {/* Progressive Disclosure Toggle for Advanced Options */}
+              <div className="pt-1">
+                <button
+                  type="button"
+                  onClick={() => setIsAdvancedOpen(!isAdvancedOpen)}
+                  className="inline-flex items-center gap-2 text-xs font-semibold text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-200 cursor-pointer py-1.5 px-3 rounded-lg bg-neutral-50 dark:bg-neutral-800/50 border border-neutral-200 dark:border-neutral-700/80 transition-colors shadow-2xs"
+                >
+                  <span>⚙️ Opções Avançadas & Metas de Tempo</span>
+                  <span className="text-2xs px-1.5 py-0.5 rounded-full bg-neutral-200 dark:bg-neutral-700 text-neutral-700 dark:text-neutral-300 font-mono">
+                    {targetMinutes || customTarget || resumeSession ? '1 ativa' : 'opcional'}
+                  </span>
+                  <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${isAdvancedOpen ? 'rotate-180' : ''}`} />
+                </button>
+              </div>
+
+              {/* Collapsible Advanced Options Section */}
+              {isAdvancedOpen && (
+                <div className="space-y-6 pt-3 pb-1 border-t border-neutral-200 dark:border-neutral-800 animate-in fade-in-50 duration-200">
+                  {/* Target Minutes (RF04) */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-semibold text-neutral-700 dark:text-neutral-300 flex items-center gap-1.5">
+                        <Target className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                        <span>Objetivo de Tempo (Alerta quando atingido)</span>
+                      </label>
+                      <span className="text-xs font-semibold text-neutral-700 dark:text-neutral-300">
+                        {customTarget
+                          ? `${customTarget} minutos`
+                          : targetMinutes
+                          ? `${targetMinutes} minutos (${targetMinutes / 60}h)`
+                          : 'Sem objetivo'}
+                      </span>
+                    </div>
+
+                    {/* Quick preset chips */}
+                    <div className="flex flex-wrap gap-2">
+                      {[
+                        { label: 'Sem meta', val: null },
+                        { label: '15m', val: 15 },
+                        { label: '30m', val: 30 },
+                        { label: '1 hora', val: 60 },
+                        { label: '2 horas', val: 120 },
+                        { label: '4 horas', val: 240 },
+                      ].map((preset) => {
+                        const isSelected =
+                          !customTarget && targetMinutes === preset.val;
+                        return (
+                          <button
+                            key={preset.label}
+                            type="button"
+                            onClick={() => {
+                              setCustomTarget('');
+                              setTargetMinutes(preset.val);
+                            }}
+                            className={`px-3 py-1.5 text-xs font-bold rounded-lg border transition-colors cursor-pointer ${
+                              isSelected
+                                ? 'border-neutral-900 dark:border-neutral-100 bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 shadow-xs'
+                                : 'border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 hover:bg-neutral-100 dark:hover:bg-neutral-800'
+                            }`}
+                          >
+                            {preset.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* Custom Target Input */}
+                    <div className="flex items-center gap-2 pt-1">
+                      <span className="text-xs font-semibold text-neutral-700 dark:text-neutral-300">Ou digite em minutos:</span>
+                      <Input
+                        type="number"
+                        min="1"
+                        max="1440"
+                        placeholder="Ex: 45"
+                        value={customTarget}
+                        onChange={(e) => setCustomTarget(e.target.value)}
+                        className="w-28 text-xs font-medium h-9 text-neutral-900 dark:text-neutral-100"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Session Continuation Banner (Inherited from History "Continuar") */}
+                  {resumeSession && (
+                    <div className="flex items-center justify-between p-3.5 rounded-lg border border-indigo-200 dark:border-indigo-800 bg-indigo-50/80 dark:bg-indigo-950/60">
+                      <div className="flex items-center gap-2.5 text-xs text-indigo-900 dark:text-indigo-200">
+                        <Link2 className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                        <div>
+                          <span className="font-semibold block">Continuação da sessão anterior:</span>
+                          <span className="opacity-95 font-medium">{resumeSession.title} ({formatDateTime(resumeSession.start_time)})</span>
+                        </div>
+                      </div>
+                      {onClearResumeSession && (
+                        <button
+                          type="button"
+                          onClick={onClearResumeSession}
+                          className="text-xs font-medium text-indigo-700 dark:text-indigo-300 hover:underline cursor-pointer"
+                        >
+                          Remover Vínculo
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Action Buttons */}
               <div className="pt-2 flex flex-col sm:flex-row sm:items-center gap-3">

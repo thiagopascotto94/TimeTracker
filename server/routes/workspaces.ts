@@ -8,6 +8,63 @@ export const workspacesRouter = Router();
 
 workspacesRouter.use(authMiddleware);
 
+// GET /api/workspaces/live-activity - Get team members working right now in current active workspace
+workspacesRouter.get('/live-activity', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const workspaceId = req.workspaceId;
+    const userId = req.userId!;
+
+    if (!workspaceId) {
+      return res.status(400).json({ error: 'Workspace ativo não especificado' });
+    }
+
+    const membership = await WorkspaceMember.findOne({
+      where: { workspace_id: workspaceId, user_id: userId },
+    });
+    if (!membership) {
+      return res.status(403).json({ error: 'Acesso negado ao workspace' });
+    }
+
+    const canViewBilling = membership.role === 'owner' || membership.can_view_billing !== false;
+
+    const activeSessions = await TimeSession.findAll({
+      where: {
+        workspace_id: workspaceId,
+        end_time: null,
+      },
+      include: [
+        { model: User, attributes: ['id', 'name', 'email', 'role'] },
+        { model: Client, as: 'Client', attributes: ['id', 'name', 'company'] },
+      ],
+      order: [['start_time', 'ASC']],
+    });
+
+    const liveMembers = activeSessions.map((session: any) => {
+      const u = session.User || session.user;
+      const c = session.Client;
+      return {
+        session_id: session.id,
+        user_id: u?.id || session.user_id,
+        name: u?.name || 'Membro',
+        email: u?.email || '',
+        title: session.title,
+        start_time: session.start_time,
+        client: c ? { id: c.id, name: c.name, company: c.company } : null,
+        hourly_rate: canViewBilling ? session.hourly_rate : null,
+      };
+    });
+
+    return res.json({
+      workspace_id: workspaceId,
+      live_count: liveMembers.length,
+      members: liveMembers,
+    });
+  } catch (error) {
+    console.error('Error fetching live activity:', error);
+    res.status(500).json({ error: 'Erro ao buscar atividade em tempo real da equipe' });
+  }
+});
+
 // GET /api/workspaces - List workspaces of authenticated user
 workspacesRouter.get('/', async (req: AuthenticatedRequest, res: Response) => {
   try {

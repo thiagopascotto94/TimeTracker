@@ -11,10 +11,10 @@
 | **00** | **Bloco de Notas & TODOs (Rich Text)** | Rascunhos, checklists e controle de privacidade (Pessoal / Equipe) | [`00-bloco-de-notas-rich-text-todo.md`](./00-bloco-de-notas-rich-text-todo.md) | ✅ Concluído |
 | **01** | **Título Dinâmico & Atalhos Globais** | Visibilidade em abas de fundo e agilidade via teclado | [`01-titulo-dinamico-e-atalhos.md`](./01-titulo-dinamico-e-atalhos.md) | ✅ Concluído |
 | **02** | **Criação Rápida de Clientes Inline** | Eliminação de atrito no timer (*Zero Friction*) | [`02-criacao-rapida-clientes-inline.md`](./02-criacao-rapida-clientes-inline.md) | ✅ Concluído |
-| **03** | **Simplificação Progressiva do Timer** | Redução de sobrecarga cognitiva visual | [`03-simplificacao-progressiva-timer.md`](./03-simplificacao-progressiva-timer.md) | 📋 Planejado |
-| **04** | **Equipe em Tempo Real (Team Pulse)** | Visibilidade instantânea de quem está ativo no time | [`04-equipe-tempo-real-team-pulse.md`](./04-equipe-tempo-real-team-pulse.md) | 📋 Planejado |
-| **05** | **Onboarding & Empty States Educativos** | Primeiros passos fluídos para novos usuários e convidados | [`05-onboarding-e-empty-states.md`](./05-onboarding-e-empty-states.md) | 📋 Planejado |
-| **06** | **Microinterações & Celebração de Metas** | Satisfação visual (*Delight*) e feedback refinado | [`06-microinteracoes-e-celebracao-metas.md`](./06-microinteracoes-e-celebracao-metas.md) | 📋 Planejado |
+| **03** | **Simplificação Progressiva do Timer** | Redução de sobrecarga cognitiva visual | [`03-simplificacao-progressiva-timer.md`](./03-simplificacao-progressiva-timer.md) | ✅ Concluído |
+| **04** | **Equipe em Tempo Real (Team Pulse)** | Visibilidade instantânea de quem está ativo no time | [`04-equipe-tempo-real-team-pulse.md`](./04-equipe-tempo-real-team-pulse.md) | ✅ Concluído |
+| **05** | **Onboarding & Empty States Educativos** | Primeiros passos fluídos para novos usuários e convidados | [`05-onboarding-e-empty-states.md`](./05-onboarding-e-empty-states.md) | ✅ Concluído |
+| **06** | **Microinterações & Celebração de Metas** | Satisfação visual (*Delight*) e feedback refinado | [`06-microinteracoes-e-celebracao-metas.md`](./06-microinteracoes-e-celebracao-metas.md) | ✅ Concluído |
 
 ---
 

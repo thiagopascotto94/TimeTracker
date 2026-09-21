@@ -999,6 +999,7 @@ function AppContent() {
                     variant: 'success',
                   });
                 }}
+                onNavigate={(tab) => setActiveTab(tab)}
               />
             )}
 

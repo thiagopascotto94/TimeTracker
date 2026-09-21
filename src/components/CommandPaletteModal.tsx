@@ -2,45 +2,45 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Search,
   Clock,
-  FileText,
-  BarChart3,
-  History,
   Briefcase,
-  Bot,
+  BarChart3,
+  FileText,
+  Sparkles,
   Settings,
   Plus,
-  Play,
-  Square,
   Moon,
   Sun,
-  Keyboard,
   ArrowRight,
-  Sparkles,
+  Command as CmdIcon,
+  Play,
+  HelpCircle,
 } from 'lucide-react';
-import { Client, TimeSession } from '../types';
+import { Tenant, Client, TimeSession } from '../types';
 
-export interface CommandPaletteModalProps {
+interface CommandPaletteModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onNavigate: (tab: string) => void;
-  onToggleTimer: () => void;
-  onNewNote: () => void;
-  onNewClient: () => void;
-  onToggleTheme: () => void;
-  onOpenShortcutsHelp: () => void;
-  activeSession: TimeSession | null;
-  clients: Client[];
-  theme: 'light' | 'dark';
+  onToggleTimer?: () => void;
+  onNewNote?: () => void;
+  onNewClient?: () => void;
+  onToggleTheme?: () => void;
+  onOpenShortcutsHelp?: () => void;
+  activeSession?: TimeSession | null;
+  clients?: Client[];
+  theme?: string;
+  workspaces?: Tenant[];
+  currentWorkspaceId?: string;
+  onSwitchWorkspace?: (id: string) => void;
 }
 
-interface PaletteAction {
+interface CommandItem {
   id: string;
-  title: string;
-  subtitle?: string;
-  category: 'Navegação' | 'Ações do Cronômetro' | 'Criação' | 'Preferências';
-  icon: React.ComponentType<{ className?: string }>;
-  shortcut?: string;
-  run: () => void;
+  label: string;
+  category: string;
+  icon: React.ElementType;
+  action: () => void;
+  keywords: string;
 }
 
 export function CommandPaletteModal({
@@ -53,302 +53,285 @@ export function CommandPaletteModal({
   onToggleTheme,
   onOpenShortcutsHelp,
   activeSession,
-  clients,
-  theme,
+  clients = [],
+  theme = 'light',
+  workspaces = [],
+  currentWorkspaceId,
+  onSwitchWorkspace,
 }: CommandPaletteModalProps) {
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
 
-  // Focus input on open & reset state
   useEffect(() => {
     if (open) {
       setQuery('');
       setSelectedIndex(0);
-      setTimeout(() => {
-        inputRef.current?.focus();
-      }, 50);
+      setTimeout(() => inputRef.current?.focus(), 50);
     }
   }, [open]);
 
-  // Define commands
-  const allActions: PaletteAction[] = [
-    // Navigation
+  const isDarkMode = theme === 'dark';
+
+  const commands: CommandItem[] = [
     {
       id: 'nav-timer',
-      title: 'Ir para Cronômetro',
-      subtitle: 'Controle de tempo em andamento e metas',
+      label: 'Ir para Timer / Sessão Ativa',
       category: 'Navegação',
       icon: Clock,
-      run: () => onNavigate('timer'),
-    },
-    {
-      id: 'nav-notes',
-      title: 'Ir para Notas & TODO',
-      subtitle: 'Checklists, rascunhos e anotações ricas',
-      category: 'Navegação',
-      icon: FileText,
-      run: () => onNavigate('notes'),
-    },
-    {
-      id: 'nav-reports',
-      title: 'Ir para Relatórios',
-      subtitle: 'Faturamento, métricas e links compartilháveis',
-      category: 'Navegação',
-      icon: BarChart3,
-      run: () => onNavigate('reports'),
+      action: () => {
+        onNavigate('timer');
+        onOpenChange(false);
+      },
+      keywords: 'timer cronometro relogio sessao',
     },
     {
       id: 'nav-history',
-      title: 'Ir para Histórico',
-      subtitle: 'Visualizar e editar sessões registradas',
+      label: 'Ver Histórico de Sessões',
       category: 'Navegação',
-      icon: History,
-      run: () => onNavigate('history'),
+      icon: Clock,
+      action: () => {
+        onNavigate('history');
+        onOpenChange(false);
+      },
+      keywords: 'historico sessoes relatorio passado',
     },
     {
       id: 'nav-clients',
-      title: 'Ir para Clientes',
-      subtitle: 'Gerenciar empresas, projetos e contatos',
+      label: 'Gerenciar Clientes & Projetos',
       category: 'Navegação',
       icon: Briefcase,
-      run: () => onNavigate('clients'),
+      action: () => {
+        onNavigate('clients');
+        onOpenChange(false);
+      },
+      keywords: 'clientes projetos faturamento',
+    },
+    {
+      id: 'nav-reports',
+      label: 'Abrir Relatórios Faturáveis',
+      category: 'Navegação',
+      icon: BarChart3,
+      action: () => {
+        onNavigate('reports');
+        onOpenChange(false);
+      },
+      keywords: 'relatorios graficos faturamento financas',
+    },
+    {
+      id: 'nav-notes',
+      label: 'Bloco de Notas & TODOs (Rich Text)',
+      category: 'Navegação',
+      icon: FileText,
+      action: () => {
+        if (onNewNote) onNewNote();
+        onNavigate('notes');
+        onOpenChange(false);
+      },
+      keywords: 'notas bloco de notas rascunho tarefas',
     },
     {
       id: 'nav-assistant',
-      title: 'Ir para Assistente Cronos AI',
-      subtitle: 'Comandos em linguagem natural e automações',
-      category: 'Navegação',
-      icon: Bot,
-      run: () => onNavigate('assistant'),
+      label: 'Assistente Cronos AI',
+      category: 'IA & Inteligência',
+      icon: Sparkles,
+      action: () => {
+        onNavigate('assistant');
+        onOpenChange(false);
+      },
+      keywords: 'ai assistente gemini inteligencia',
+    },
+    {
+      id: 'action-toggle-timer',
+      label: activeSession ? 'Pausar / Parar Timer Atual' : 'Iniciar Novo Timer',
+      category: 'Ações Rápidas',
+      icon: Play,
+      action: () => {
+        if (onToggleTimer) onToggleTimer();
+        onOpenChange(false);
+      },
+      keywords: 'timer iniciar parar pausar',
+    },
+    {
+      id: 'action-new-client',
+      label: 'Cadastrar Novo Cliente',
+      category: 'Ações Rápidas',
+      icon: Plus,
+      action: () => {
+        if (onNewClient) onNewClient();
+        onOpenChange(false);
+      },
+      keywords: 'novo cliente cadastrar criar',
+    },
+    {
+      id: 'action-theme',
+      label: isDarkMode ? 'Mudar para Tema Claro' : 'Mudar para Tema Escuro',
+      category: 'Preferências',
+      icon: isDarkMode ? Sun : Moon,
+      action: () => {
+        if (onToggleTheme) onToggleTheme();
+        onOpenChange(false);
+      },
+      keywords: 'tema escuro claro dark light modo',
+    },
+    {
+      id: 'action-shortcuts',
+      label: 'Ver Atalhos de Teclado',
+      category: 'Ajuda',
+      icon: HelpCircle,
+      action: () => {
+        if (onOpenShortcutsHelp) onOpenShortcutsHelp();
+        onOpenChange(false);
+      },
+      keywords: 'atalhos keyboard shortcuts ajuda',
     },
     {
       id: 'nav-settings',
-      title: 'Ir para Configurações',
-      subtitle: 'Workspace, membros, faturamento e integrações',
-      category: 'Navegação',
+      label: 'Configurações do Workspace',
+      category: 'Configurações',
       icon: Settings,
-      run: () => onNavigate('settings'),
-    },
-
-    // Timer actions
-    {
-      id: 'timer-toggle',
-      title: activeSession ? 'Finalizar Sessão Ativa' : 'Iniciar Novo Cronômetro',
-      subtitle: activeSession
-        ? `Parar cronômetro em andamento (${activeSession.title || 'Sem título'})`
-        : 'Começar a contar o tempo de trabalho agora',
-      category: 'Ações do Cronômetro',
-      icon: activeSession ? Square : Play,
-      shortcut: 'Alt + S',
-      run: onToggleTimer,
-    },
-
-    // Creation actions
-    {
-      id: 'create-note',
-      title: 'Criar Nova Nota / Checklist',
-      subtitle: 'Adicionar documento com suporte a Markdown',
-      category: 'Criação',
-      icon: Plus,
-      run: onNewNote,
-    },
-    {
-      id: 'create-client',
-      title: 'Cadastrar Novo Cliente',
-      subtitle: 'Registrar nova empresa ou contrato',
-      category: 'Criação',
-      icon: Briefcase,
-      run: onNewClient,
-    },
-
-    // Preferences
-    {
-      id: 'toggle-theme',
-      title: theme === 'dark' ? 'Mudar para Tema Claro' : 'Mudar para Tema Escuro',
-      subtitle: 'Alternar esquema de cores visual da interface',
-      category: 'Preferências',
-      icon: theme === 'dark' ? Sun : Moon,
-      run: onToggleTheme,
-    },
-    {
-      id: 'help-shortcuts',
-      title: 'Ver Atalhos de Teclado',
-      subtitle: 'Exibir todos os comandos e combinações rápidas',
-      category: 'Preferências',
-      icon: Keyboard,
-      shortcut: '?',
-      run: onOpenShortcutsHelp,
+      action: () => {
+        onNavigate('settings');
+        onOpenChange(false);
+      },
+      keywords: 'configuracoes preferencias workspace',
     },
   ];
 
-  // Also include client quick jump
-  if (clients && clients.length > 0) {
-    clients.forEach((c) => {
-      allActions.push({
-        id: `client-${c.id}`,
-        title: `Cliente: ${c.name}`,
-        subtitle: `Ver detalhes e contatos de ${c.name}`,
-        category: 'Navegação',
+  workspaces.forEach((ws) => {
+    if (ws.id !== currentWorkspaceId && onSwitchWorkspace) {
+      commands.push({
+        id: `switch-ws-${ws.id}`,
+        label: `Mudar para Workspace: ${ws.name}`,
+        category: 'Workspaces',
         icon: Briefcase,
-        run: () => onNavigate('clients'),
+        action: () => {
+          onSwitchWorkspace(ws.id);
+          onOpenChange(false);
+        },
+        keywords: `workspace empresa trocar ${ws.name}`,
       });
-    });
-  }
+    }
+  });
 
-  // Filter actions based on query
-  const filteredActions = allActions.filter((item) => {
-    if (!query.trim()) return true;
-    const q = query.toLowerCase().trim();
+  const filteredCommands = commands.filter((cmd) => {
+    const q = query.toLowerCase();
     return (
-      item.title.toLowerCase().includes(q) ||
-      (item.subtitle && item.subtitle.toLowerCase().includes(q)) ||
-      item.category.toLowerCase().includes(q)
+      cmd.label.toLowerCase().includes(q) ||
+      cmd.category.toLowerCase().includes(q) ||
+      cmd.keywords.includes(q)
     );
   });
 
-  // Handle keyboard navigation inside the palette
+  useEffect(() => {
+    setSelectedIndex(0);
+  }, [query]);
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      setSelectedIndex((prev) => (prev + 1) % (filteredActions.length || 1));
+      setSelectedIndex((prev) => (prev + 1) % Math.max(1, filteredCommands.length));
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
-      setSelectedIndex((prev) => (prev - 1 + filteredActions.length) % (filteredActions.length || 1));
-    } else if (e.key === 'Enter') {
+      setSelectedIndex((prev) => (prev - 1 + filteredCommands.length) % Math.max(1, filteredCommands.length));
+    } else if (e.key === 'Enter' && filteredCommands[selectedIndex]) {
       e.preventDefault();
-      if (filteredActions[selectedIndex]) {
-        filteredActions[selectedIndex].run();
-        onOpenChange(false);
-      }
+      filteredCommands[selectedIndex].action();
     } else if (e.key === 'Escape') {
       e.preventDefault();
       onOpenChange(false);
     }
   };
 
-  // Scroll active item into view
-  useEffect(() => {
-    const listEl = listRef.current;
-    if (!listEl) return;
-    const activeEl = listEl.querySelector(`[data-index="${selectedIndex}"]`) as HTMLElement;
-    if (activeEl) {
-      activeEl.scrollIntoView({ block: 'nearest' });
-    }
-  }, [selectedIndex]);
-
   if (!open) return null;
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center pt-16 sm:pt-24 px-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150"
+      className="fixed inset-0 z-50 bg-neutral-900/60 backdrop-blur-xs flex items-start justify-center pt-[15vh] px-4 animate-in fade-in duration-150"
       onClick={() => onOpenChange(false)}
     >
       <div
-        className="w-full max-w-xl rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shadow-2xl overflow-hidden flex flex-col max-h-[80vh] animate-in zoom-in-95 duration-150"
+        className="w-full max-w-xl bg-white dark:bg-neutral-900 rounded-2xl border border-neutral-200 dark:border-neutral-800 shadow-2xl overflow-hidden flex flex-col"
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={handleKeyDown}
       >
-        {/* Search Header */}
-        <div className="flex items-center gap-3 px-4 py-3.5 border-b border-neutral-200 dark:border-neutral-800">
+        <div className="flex items-center px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 gap-3">
           <Search className="w-5 h-5 text-neutral-400 shrink-0" />
           <input
             ref={inputRef}
             type="text"
+            placeholder="Digite um comando ou navegue... (Ex: Novo Cliente, Relatórios)"
             value={query}
-            onChange={(e) => {
-              setQuery(e.target.value);
-              setSelectedIndex(0);
-            }}
-            onKeyDown={handleKeyDown}
-            placeholder="Digite um comando, aba ou cliente... (ex: cronômetro, notas, faturamento)"
-            className="flex-1 bg-transparent text-sm font-medium text-neutral-900 dark:text-neutral-100 placeholder:text-neutral-400 focus:outline-none"
+            onChange={(e) => setQuery(e.target.value)}
+            className="w-full bg-transparent text-sm text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 outline-hidden border-0 focus:ring-0"
           />
-          <kbd className="hidden sm:inline-flex items-center px-2 py-0.5 text-2xs font-mono font-medium text-neutral-500 dark:text-neutral-400 bg-neutral-100 dark:bg-neutral-800 rounded border border-neutral-200 dark:border-neutral-700">
-            ESC
-          </kbd>
+          <div className="flex items-center gap-1 shrink-0 text-2xs text-neutral-400 font-mono bg-neutral-100 dark:bg-neutral-800 px-2 py-1 rounded-md border border-neutral-200 dark:border-neutral-700">
+            <span>ESC</span>
+          </div>
         </div>
 
-        {/* Results List */}
-        <div ref={listRef} className="overflow-y-auto p-2 space-y-1 flex-1">
-          {filteredActions.length > 0 ? (
-            filteredActions.map((action, idx) => {
+        <div className="max-h-80 overflow-y-auto p-2 space-y-1">
+          {filteredCommands.length === 0 ? (
+            <div className="py-8 text-center text-xs text-neutral-400">
+              Nenhum comando encontrado para &quot;{query}&quot;
+            </div>
+          ) : (
+            filteredCommands.map((cmd, idx) => {
+              const Icon = cmd.icon;
               const isSelected = idx === selectedIndex;
-              const Icon = action.icon;
-
               return (
                 <button
-                  key={action.id}
-                  data-index={idx}
+                  key={cmd.id}
                   type="button"
-                  onClick={() => {
-                    action.run();
-                    onOpenChange(false);
-                  }}
+                  onClick={cmd.action}
                   onMouseEnter={() => setSelectedIndex(idx)}
-                  className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-left transition-colors cursor-pointer ${
+                  className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs transition-colors cursor-pointer ${
                     isSelected
-                      ? 'bg-neutral-100 dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100'
-                      : 'text-neutral-700 dark:text-neutral-300 hover:bg-neutral-50 dark:hover:bg-neutral-800/50'
+                      ? 'bg-indigo-600 text-white font-medium shadow-2xs'
+                      : 'text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800/60'
                   }`}
                 >
-                  <div className="flex items-center gap-3 min-w-0">
+                  <div className="flex items-center gap-2.5 min-w-0">
                     <div
-                      className={`flex h-8 w-8 items-center justify-center rounded-md shrink-0 ${
+                      className={`p-1.5 rounded-lg shrink-0 ${
                         isSelected
-                          ? 'bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900'
+                          ? 'bg-indigo-700 text-white'
                           : 'bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400'
                       }`}
                     >
-                      <Icon className="h-4 w-4" />
+                      <Icon className="w-4 h-4" />
                     </div>
-                    <div className="min-w-0">
-                      <div className="text-xs font-semibold truncate text-neutral-900 dark:text-neutral-100">
-                        {action.title}
-                      </div>
-                      {action.subtitle && (
-                        <div className="text-[11px] text-neutral-500 dark:text-neutral-400 truncate">
-                          {action.subtitle}
-                        </div>
-                      )}
+                    <div className="text-left truncate">
+                      <p className="truncate font-medium">{cmd.label}</p>
+                      <p
+                        className={`text-2xs ${
+                          isSelected ? 'text-indigo-200' : 'text-neutral-400 dark:text-neutral-500'
+                        }`}
+                      >
+                        {cmd.category}
+                      </p>
                     </div>
                   </div>
-
-                  <div className="flex items-center gap-2 shrink-0 pl-2">
-                    {action.shortcut && (
-                      <kbd className="px-1.5 py-0.5 text-[10px] font-mono font-medium rounded bg-neutral-200 dark:bg-neutral-700 text-neutral-700 dark:text-neutral-300">
-                        {action.shortcut}
-                      </kbd>
-                    )}
-                    {isSelected && (
-                      <ArrowRight className="w-3.5 h-3.5 text-neutral-400 shrink-0" />
-                    )}
-                  </div>
+                  <ArrowRight
+                    className={`w-3.5 h-3.5 shrink-0 ml-2 ${
+                      isSelected ? 'text-indigo-200' : 'text-neutral-300 dark:text-neutral-700'
+                    }`}
+                  />
                 </button>
               );
             })
-          ) : (
-            <div className="py-8 text-center text-xs text-neutral-500 dark:text-neutral-400">
-              Nenhum comando encontrado para &quot;{query}&quot;
-            </div>
           )}
         </div>
 
-        {/* Footer Navigation Bar */}
-        <div className="px-4 py-2 border-t border-neutral-100 dark:border-neutral-800/80 bg-neutral-50 dark:bg-neutral-950/40 flex items-center justify-between text-[11px] text-neutral-500 dark:text-neutral-400">
-          <div className="flex items-center gap-3">
-            <span className="flex items-center gap-1">
-              <kbd className="px-1 py-0.5 font-mono text-[10px] bg-neutral-200 dark:bg-neutral-800 rounded">↑</kbd>
-              <kbd className="px-1 py-0.5 font-mono text-[10px] bg-neutral-200 dark:bg-neutral-800 rounded">↓</kbd>
-              <span>Navegar</span>
-            </span>
-            <span className="flex items-center gap-1">
-              <kbd className="px-1 py-0.5 font-mono text-[10px] bg-neutral-200 dark:bg-neutral-800 rounded">Enter</kbd>
-              <span>Executar</span>
-            </span>
+        <div className="px-4 py-2.5 bg-neutral-50 dark:bg-neutral-950/60 border-t border-neutral-200 dark:border-neutral-800 flex items-center justify-between text-2xs text-neutral-400">
+          <div className="flex items-center gap-2">
+            <span>Use <kbd className="font-mono bg-neutral-200 dark:bg-neutral-800 px-1 py-0.5 rounded">↑</kbd> <kbd className="font-mono bg-neutral-200 dark:bg-neutral-800 px-1 py-0.5 rounded">↓</kbd> para navegar</span>
+            <span>•</span>
+            <span><kbd className="font-mono bg-neutral-200 dark:bg-neutral-800 px-1 py-0.5 rounded">Enter</kbd> para selecionar</span>
           </div>
-          <div>
-            <span className="text-2xs text-neutral-400">Cronos Quick Command</span>
+          <div className="flex items-center gap-1 font-semibold text-indigo-600 dark:text-indigo-400">
+            <CmdIcon className="w-3 h-3" />
+            <span>Cronos Command Center</span>
           </div>
         </div>
       </div>

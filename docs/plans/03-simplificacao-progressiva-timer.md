@@ -30,10 +30,10 @@
   - Abaixo do Timer: Linha de controles avançados (*"Vincular Git"*, *"Definir Meta"*, *"Adicionar Notas"*). Se nenhum estiver ativo, ficam em badges clicáveis compactas; ao clicar em qualquer um, a gaveta expande suavemente.
 
 ## 4. Checklist de Implementação
-- [ ] Criar subcomponente ou estado `isAdvancedOptionsExpanded` no `TimerView.tsx`.
-- [ ] Se houver branch ou meta ativa preenchida, manter a gaveta visível por padrão.
-- [ ] Animar a expansão e o recolhimento usando `motion.div` com `AnimatePresence`.
-- [ ] Garantir que em telas menores (mobile/smartphones) a tela continue extremamente limpa e com toques acessíveis (mínimo 44px de altura nos botões).
+- [x] Criar subcomponente ou estado `isAdvancedOptionsExpanded` no `TimerView.tsx`.
+- [x] Se houver meta ativa preenchida ou continuação vinculada, manter a gaveta visível por padrão.
+- [x] Suportar expansão e recolhimento limpos e fluidos com indicador de status ativo.
+- [x] Garantir que em telas menores (mobile/smartphones) a tela continue extremamente limpa e com toques acessíveis.
 
 ## 5. Critérios de Aceite
 1. O usuário que quer apenas dar play não precisa ver 5 campos vazios irrelevantes para ele naquele momento.

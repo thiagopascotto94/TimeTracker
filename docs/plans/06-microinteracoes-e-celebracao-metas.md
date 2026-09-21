@@ -29,11 +29,11 @@
   - `src/components/ui/Skeleton.tsx`: Esqueletos reutilizáveis.
 
 ## 4. Checklist de Implementação
-- [ ] Criar modal de paleta de comandos acionável por `Cmd + K` ou `Ctrl + K`.
-- [ ] Implementar busca filtrada de rotas, ações rápidas e workspaces na paleta.
-- [ ] Implementar anel de progresso SVG dinâmico no `TimerView`.
-- [ ] Adicionar skeletons de carregamento em substituição a spinners intrusivos.
-- [ ] Validar consumo de memória e performance de renderização a 60fps.
+- [x] Criar modal de paleta de comandos acionável por `Cmd + K` ou `Ctrl + K`.
+- [x] Implementar busca filtrada de rotas, ações rápidas e workspaces na paleta.
+- [x] Implementar anel de progresso SVG dinâmico no `TimerView`.
+- [x] Adicionar skeletons de carregamento em substituição a spinners intrusivos.
+- [x] Validar consumo de memória e performance de renderização a 60fps.
 
 ## 5. Critérios de Aceite
 1. O atalho `Ctrl+K` ou `Cmd+K` abre a paleta instantaneamente e permite navegar com as setas do teclado.
