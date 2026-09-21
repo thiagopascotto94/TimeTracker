@@ -3,7 +3,7 @@ import { Lock, LogIn, Sparkles, UserCheck, ArrowRight } from 'lucide-react';
 import { User, Tenant, TimeSession, TaskItem, Client, GitRepositoryItem, LinkedClientItem } from './types';
 import { ToastProvider, useToast } from './components/ui/toast';
 import { Button } from './components/ui/button';
-import { Navbar } from './components/Navbar';
+import { Sidebar } from './components/Sidebar';
 import { TimerView } from './components/TimerView';
 import { ReportsView } from './components/ReportsView';
 import { HistoryView } from './components/HistoryView';
@@ -18,11 +18,16 @@ import { InviteAcceptView } from './components/InviteAcceptView';
 import { AiAssistantView } from './components/AiAssistantView';
 import { SessionEditView } from './components/SessionEditView';
 import { LinkedClientsView } from './components/LinkedClientsView';
+import { NotesView } from './components/NotesView';
+import { CommandPaletteModal } from './components/CommandPaletteModal';
+import { ShortcutsHelpModal } from './components/ShortcutsHelpModal';
+import { useDynamicDocumentTitle } from './hooks/useDynamicDocumentTitle';
+import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { formatCurrency, formatDurationHuman } from './utils/format';
 import { apiFetch } from './utils/api';
 
-export type TabType = 'timer' | 'reports' | 'history' | 'clients' | 'client-new' | 'client-edit' | 'client-contacts' | 'session-edit' | 'settings' | 'assistant' | 'linked-clients';
-const VALID_TABS: readonly TabType[] = ['timer', 'reports', 'history', 'clients', 'client-new', 'client-edit', 'client-contacts', 'session-edit', 'settings', 'assistant', 'linked-clients'] as const;
+export type TabType = 'timer' | 'reports' | 'history' | 'clients' | 'client-new' | 'client-edit' | 'client-contacts' | 'session-edit' | 'notes' | 'settings' | 'assistant' | 'linked-clients';
+const VALID_TABS: readonly TabType[] = ['timer', 'reports', 'history', 'clients', 'client-new', 'client-edit', 'client-contacts', 'session-edit', 'notes', 'settings', 'assistant', 'linked-clients'] as const;
 
 function getTabFromUrl(): { tab: TabType; clientId?: string; sessionId?: string; reportsSubTab?: 'overview' | 'shared-links' } {
   if (typeof window === 'undefined') return { tab: 'timer' };
@@ -196,6 +201,8 @@ function AppContent() {
   const [loadingLinkedClients, setLoadingLinkedClients] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
   const [authModalOpen, setAuthModalOpen] = useState<boolean>(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState<boolean>(false);
+  const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState<boolean>(false);
 
   // Dark / Light Theme State
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
@@ -219,6 +226,51 @@ function AppContent() {
   const toggleTheme = () => {
     setTheme((prev) => (prev === 'light' ? 'dark' : 'light'));
   };
+
+  // Active client for dynamic title (Etapa 01)
+  const activeClient = clients.find((c) => c.id === activeSession?.client_id);
+
+  // Synchronize document.title dynamically in real-time (Etapa 01)
+  useDynamicDocumentTitle({
+    activeSession,
+    clientName: activeClient?.name,
+  });
+
+  // Global timer toggle for shortcuts (Alt + S / Shift + Space)
+  const handleToggleTimer = useCallback(() => {
+    if (activeSession) {
+      if (activeTab !== 'timer') {
+        setActiveTab('timer');
+      }
+      window.dispatchEvent(new CustomEvent('cronos:open-stop-modal'));
+    } else {
+      if (activeTab !== 'timer') {
+        setActiveTab('timer');
+      }
+      window.dispatchEvent(new CustomEvent('cronos:trigger-start-timer'));
+    }
+  }, [activeSession, activeTab, setActiveTab]);
+
+  // Global Keyboard Shortcuts (Etapa 01)
+  useKeyboardShortcuts({
+    onToggleTimer: handleToggleTimer,
+    onOpenCommandPalette: () => setCommandPaletteOpen((prev) => !prev),
+    onCloseModals: () => {
+      if (commandPaletteOpen) {
+        setCommandPaletteOpen(false);
+        return;
+      }
+      if (shortcutsHelpOpen) {
+        setShortcutsHelpOpen(false);
+        return;
+      }
+      if (authModalOpen) {
+        setAuthModalOpen(false);
+        return;
+      }
+    },
+    onOpenShortcutsHelp: () => setShortcutsHelpOpen((prev) => !prev),
+  });
 
   // Synchronize initial URL if loaded at root '/' without losing active tab
   useEffect(() => {
@@ -882,13 +934,13 @@ function AppContent() {
   const hourlyRate = user.default_hourly_rate || 150.0;
 
   return (
-    <div className={`bg-neutral-50 dark:bg-neutral-950 text-neutral-900 dark:text-neutral-100 flex flex-col font-sans transition-colors ${
+    <div className={`bg-neutral-50 dark:bg-neutral-950 text-neutral-900 dark:text-neutral-100 flex flex-col md:flex-row font-sans transition-colors ${
       activeTab === 'assistant'
         ? 'h-[100dvh] max-h-[100dvh] overflow-hidden'
         : 'min-h-screen overflow-x-hidden'
     }`}>
-      {/* Top Navigation */}
-      <Navbar
+      {/* Lateral Sidebar Navigation */}
+      <Sidebar
         activeTab={activeTab.startsWith('client-') ? 'clients' : activeTab as any}
         setActiveTab={setActiveTab}
         user={user}
@@ -898,14 +950,17 @@ function AppContent() {
         theme={theme}
         onToggleTheme={toggleTheme}
         onWorkspaceChange={handleWorkspaceChange}
+        onOpenCommandPalette={() => setCommandPaletteOpen(true)}
+        onOpenShortcutsHelp={() => setShortcutsHelpOpen(true)}
       />
 
-      {/* Main Container */}
-      <main className={`w-full flex flex-col ${
-        activeTab === 'assistant'
-          ? 'flex-1 min-h-0 h-full p-0 m-0 max-w-none pb-14 md:pb-0 overflow-hidden'
-          : 'flex-1 py-8 max-w-7xl mx-auto px-2 sm:px-4 lg:px-6 items-center justify-center'
-      }`}>
+      <div className="flex-1 flex flex-col min-w-0 min-h-screen">
+        {/* Main Container */}
+        <main className={`w-full flex flex-col ${
+          activeTab === 'assistant'
+            ? 'flex-1 min-h-0 h-full p-0 m-0 max-w-none pb-14 md:pb-0 overflow-hidden'
+            : 'flex-1 py-8 max-w-7xl mx-auto px-2 sm:px-4 lg:px-6 items-center justify-center'
+        }`}>
         <div className={`w-full ${
           activeTab === 'assistant'
             ? 'h-full flex-1 min-h-0 flex flex-col overflow-hidden'
@@ -934,6 +989,16 @@ function AppContent() {
                 }}
                 onNavigateToSettings={() => setActiveTab('settings')}
                 loading={loading}
+                currentUserId={user?.id || ''}
+                addToast={addToast}
+                onClientCreated={(client) => {
+                  setClients((prev) => [...prev, client]);
+                  addToast({
+                    title: 'Cliente criado!',
+                    description: `O cliente "${client.name}" foi cadastrado com sucesso e selecionado.`,
+                    variant: 'success',
+                  });
+                }}
               />
             )}
 
@@ -985,6 +1050,13 @@ function AppContent() {
                 onNavigateToNewClient={navigateToNewClient}
                 onNavigateToEditClient={navigateToEditClient}
                 onNavigateToClientContacts={navigateToClientContacts}
+              />
+            )}
+
+            {activeTab === 'notes' && (
+              <NotesView
+                currentUserId={user?.id || ''}
+                addToast={addToast}
               />
             )}
 
@@ -1045,6 +1117,7 @@ function AppContent() {
                 }}
                 onNavigateToTimer={() => setActiveTab('timer')}
                 onNavigateToSettings={() => setActiveTab('settings')}
+                onNavigateToNotes={() => setActiveTab('notes')}
               />
             )}
           </div>
@@ -1073,6 +1146,34 @@ function AppContent() {
           </div>
         </footer>
       )}
+      </div>
+
+      {/* Command Palette Modal (Etapa 01) */}
+      <CommandPaletteModal
+        open={commandPaletteOpen}
+        onOpenChange={setCommandPaletteOpen}
+        onNavigate={(tab) => {
+          setActiveTab(tab as TabType);
+        }}
+        onToggleTimer={handleToggleTimer}
+        onNewNote={() => {
+          setActiveTab('notes');
+        }}
+        onNewClient={() => {
+          navigateToNewClient();
+        }}
+        onToggleTheme={toggleTheme}
+        onOpenShortcutsHelp={() => setShortcutsHelpOpen(true)}
+        activeSession={activeSession}
+        clients={clients}
+        theme={theme}
+      />
+
+      {/* Shortcuts Cheat Sheet Modal (Etapa 01) */}
+      <ShortcutsHelpModal
+        open={shortcutsHelpOpen}
+        onOpenChange={setShortcutsHelpOpen}
+      />
 
       {/* Auth / Account Switcher Modal */}
       <AuthModal

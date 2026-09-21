@@ -56,6 +56,7 @@ interface AiAssistantViewProps {
   onRefreshData: () => Promise<void>;
   onNavigateToTimer: () => void;
   onNavigateToSettings?: () => void;
+  onNavigateToNotes?: () => void;
 }
 
 interface ProviderInfo {
@@ -82,6 +83,7 @@ export function AiAssistantView({
   onRefreshData,
   onNavigateToTimer,
   onNavigateToSettings,
+  onNavigateToNotes,
 }: AiAssistantViewProps) {
   const [gitModalOpen, setGitModalOpen] = useState(false);
   const [messages, setMessages] = useState<AiChatMessage[]>([]);
@@ -347,8 +349,8 @@ export function AiAssistantView({
 
       setMessages((prev) => [...prev, botMessage]);
 
-      // If tools modified active timer or clients, refresh application data
-      if (data.activeSessionChanged || data.clientsChanged) {
+      // If tools modified active timer, clients, or notes, refresh application data
+      if (data.activeSessionChanged || data.clientsChanged || data.notesChanged) {
         await onRefreshData();
       }
     } catch (err: any) {
@@ -412,6 +414,11 @@ export function AiAssistantView({
       label: 'Sugerir Título Inteligente',
       prompt: 'Analise as tarefas e observações da minha sessão ativa e sugira um título executivo apropriado.',
       icon: Edit3,
+    },
+    {
+      label: 'Criar Nota / Checklist',
+      prompt: 'Crie uma nova nota intitulada "Checklist da Semana" com itens e tarefas organizadas em formato Markdown (- [ ]) para acompanhamento.',
+      icon: FileText,
     },
   ];
 
@@ -505,8 +512,8 @@ export function AiAssistantView({
                 Assistente Cronos AI
               </h3>
               <p className="text-xs text-neutral-500 dark:text-neutral-400 leading-relaxed">
-                Eu posso iniciar seu cronômetro, adicionar anotações e tarefas, buscar histórico de sessões,
-                analisar imagens (tickets, mockups, anotações) e executar fluxos complexos em até 60 etapas automáticas.
+                Eu posso iniciar seu cronômetro, gerenciar tarefas, criar notas ricas com Markdown e checklists,
+                buscar histórico de sessões, analisar imagens (tickets, mockups, anotações) e executar fluxos complexos em até 60 etapas automáticas.
               </p>
             </div>
 
@@ -661,6 +668,12 @@ export function AiAssistantView({
                           } else if (step.tool === 'get_financial_summary') {
                             toolLabel = 'Resumo Financeiro';
                             toolIcon = Sparkles;
+                          } else if (step.tool === 'create_note') {
+                            toolLabel = 'Criar Nota / Documento';
+                            toolIcon = FileText;
+                          } else if (step.tool === 'list_notes') {
+                            toolLabel = 'Consultar Notas';
+                            toolIcon = FileText;
                           }
 
                           const StepIcon = toolIcon;
@@ -692,11 +705,26 @@ export function AiAssistantView({
                                     </span>
                                   )}
                                 </div>
-                                {isExpanded ? (
-                                  <ChevronDown className="w-3.5 h-3.5 text-neutral-400 shrink-0" />
-                                ) : (
-                                  <ChevronRight className="w-3.5 h-3.5 text-neutral-400 shrink-0" />
-                                )}
+                                <div className="flex items-center gap-2 shrink-0">
+                                  {step.tool === 'create_note' && onNavigateToNotes && (
+                                    <span
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        onNavigateToNotes();
+                                      }}
+                                      className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 rounded-md transition-colors"
+                                      title="Abrir o módulo de Notas"
+                                    >
+                                      <FileText className="w-3 h-3" />
+                                      Ver em Notas
+                                    </span>
+                                  )}
+                                  {isExpanded ? (
+                                    <ChevronDown className="w-3.5 h-3.5 text-neutral-400 shrink-0" />
+                                  ) : (
+                                    <ChevronRight className="w-3.5 h-3.5 text-neutral-400 shrink-0" />
+                                  )}
+                                </div>
                               </button>
 
                               {isExpanded && (

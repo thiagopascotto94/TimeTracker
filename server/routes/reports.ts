@@ -102,16 +102,23 @@ reportsRouter.get('/', async (req: AuthenticatedRequest, res: Response) => {
     let totalBillableAmount = 0;
     const appliedRatesSet = new Set<number>();
 
+    const canViewBilling = req.canViewBilling !== false;
+
     const mappedSessions = sessions.map((sess) => {
       // Prioridade: Taxa da sessão editada -> Taxa personalizada do cliente -> Taxa padrão do perfil
-      const sessionRate = sess.hourly_rate ?? (sess.Client?.hourly_rate ?? defaultHourlyRate);
+      const sessionRate = canViewBilling ? (sess.hourly_rate ?? (sess.Client?.hourly_rate ?? defaultHourlyRate)) : 0;
       appliedRatesSet.add(sessionRate);
 
       const metrics = calculateSessionMetrics(sess, sessionRate);
+      if (!canViewBilling) {
+        metrics.hourlyRate = 0;
+        metrics.appliedHourlyRate = 0;
+        metrics.billableAmount = 0;
+      }
       totalDurationMs += metrics.durationMs;
       totalTasksCount += sess.Tasks ? sess.Tasks.length : 0;
       // O valor final do relatório é SEMPRE o somatório exato de cada sessão individual
-      totalBillableAmount = Number((totalBillableAmount + metrics.billableAmount).toFixed(2));
+      totalBillableAmount = canViewBilling ? Number((totalBillableAmount + metrics.billableAmount).toFixed(2)) : 0;
 
       return {
         id: sess.id,
@@ -120,7 +127,7 @@ reportsRouter.get('/', async (req: AuthenticatedRequest, res: Response) => {
         start_time: sess.start_time,
         end_time: sess.end_time,
         target_minutes: sess.target_minutes,
-        hourly_rate: sess.hourly_rate,
+        hourly_rate: canViewBilling ? sess.hourly_rate : null,
         is_locked: sess.is_locked || false,
         locked_at: sess.locked_at,
         locked_reason: sess.locked_reason,
@@ -134,11 +141,13 @@ reportsRouter.get('/', async (req: AuthenticatedRequest, res: Response) => {
     });
 
     const totalDecimalHours = Number((totalDurationMs / 3600000).toFixed(2));
-    totalBillableAmount = Number(totalBillableAmount.toFixed(2));
+    totalBillableAmount = canViewBilling ? Number(totalBillableAmount.toFixed(2)) : 0;
     const totalMinutes = Math.round(totalDurationMs / 60000);
 
-    const hasMultipleRates = appliedRatesSet.size > 1;
-    const effectiveHourlyRate = selectedClient
+    const hasMultipleRates = canViewBilling && appliedRatesSet.size > 1;
+    const effectiveHourlyRate = !canViewBilling
+      ? 0
+      : selectedClient
       ? (selectedClient.hourly_rate ?? defaultHourlyRate)
       : (appliedRatesSet.size === 1 ? Array.from(appliedRatesSet)[0] : defaultHourlyRate);
 
@@ -157,19 +166,20 @@ reportsRouter.get('/', async (req: AuthenticatedRequest, res: Response) => {
       groupedByDay[dateKey].decimalHours = Number(
         (groupedByDay[dateKey].decimalHours + s.metrics.decimalHours).toFixed(2)
       );
-      groupedByDay[dateKey].billableAmount = Number(
-        (groupedByDay[dateKey].billableAmount + s.metrics.billableAmount).toFixed(2)
-      );
+      groupedByDay[dateKey].billableAmount = canViewBilling
+        ? Number((groupedByDay[dateKey].billableAmount + s.metrics.billableAmount).toFixed(2))
+        : 0;
       groupedByDay[dateKey].sessionsCount += 1;
     }
 
     return res.json({
       summary: {
+        can_view_billing: canViewBilling,
         totalDurationMs,
         totalMinutes,
         totalDecimalHours,
         hourlyRate: effectiveHourlyRate,
-        defaultHourlyRate,
+        defaultHourlyRate: canViewBilling ? defaultHourlyRate : 0,
         hasMultipleRates,
         totalBillableAmount,
         totalSessionsCount: mappedSessions.length,
@@ -179,7 +189,7 @@ reportsRouter.get('/', async (req: AuthenticatedRequest, res: Response) => {
           ? {
               id: selectedClient.id,
               name: selectedClient.name,
-              hourlyRate: selectedClient.hourly_rate ?? defaultHourlyRate,
+              hourlyRate: canViewBilling ? (selectedClient.hourly_rate ?? defaultHourlyRate) : 0,
             }
           : null,
       },

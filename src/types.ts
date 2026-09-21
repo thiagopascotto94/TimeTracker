@@ -55,6 +55,7 @@ export interface User {
   name: string;
   email: string;
   role?: string;
+  can_view_billing?: boolean;
   default_hourly_rate: number;
 }
 
@@ -63,6 +64,7 @@ export interface WorkspaceInvite {
   tenant_id: string;
   email: string;
   role: string;
+  can_view_billing?: boolean;
   token: string;
   status: 'pending' | 'accepted' | 'expired' | 'canceled';
   expires_at: string;
@@ -79,6 +81,7 @@ export interface WorkspaceMember {
   name: string;
   email: string;
   role: string;
+  can_view_billing?: boolean;
   default_hourly_rate: number;
   created_at: string;
 }
@@ -88,6 +91,7 @@ export interface WorkspaceItem {
   name: string;
   description?: string | null;
   role: string;
+  can_view_billing?: boolean;
   members_count: number;
   is_active: boolean;
   order_index?: number;
@@ -148,6 +152,7 @@ export interface TimeSession {
 }
 
 export interface ReportSummary {
+  can_view_billing?: boolean;
   totalDurationMs: number;
   totalMinutes: number;
   totalDecimalHours: number;
@@ -484,4 +489,23 @@ export interface LinkedClientsResponse {
   user_email: string;
   linked_clients_count: number;
   linked_clients: LinkedClientItem[];
+}
+
+export interface NoteItem {
+  id: string;
+  tenant_id: string;
+  workspace_id: string;
+  user_id: string;
+  title: string;
+  content: string;
+  is_workspace_shared: boolean;
+  is_pinned?: boolean;
+  created_at?: string;
+  updated_at?: string;
+  Author?: {
+    id: string;
+    name: string;
+    email: string;
+    avatar_url?: string | null;
+  };
 }

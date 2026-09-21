@@ -1,13 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, X, Briefcase, Check } from 'lucide-react';
+import { Search, X, Briefcase, Check, Plus, Loader2 } from 'lucide-react';
 import { Client } from '../types';
 import { formatCurrency } from '../utils/format';
+import { apiFetch } from '../utils/api';
 
 interface ClientAutocompleteProps {
   clients: Client[];
   selectedClientId: string;
   onSelectClient: (clientId: string) => void;
   defaultHourlyRate: number;
+  onClientCreated?: (client: Client) => void;
 }
 
 export function ClientAutocomplete({
@@ -15,10 +17,12 @@ export function ClientAutocomplete({
   selectedClientId,
   onSelectClient,
   defaultHourlyRate,
+  onClientCreated,
 }: ClientAutocompleteProps) {
   const [query, setQuery] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const [debouncedQuery, setDebouncedQuery] = useState('');
+  const [isCreating, setIsCreating] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const selectedClient = clients.find((c) => c.id === selectedClientId);
@@ -50,6 +54,39 @@ export function ClientAutocomplete({
     const emailMatch = c.email?.toLowerCase().includes(q) || false;
     return nameMatch || companyMatch || emailMatch;
   });
+
+  const exactMatch = clients.some(
+    (c) => c.name.toLowerCase() === query.trim().toLowerCase()
+  );
+  const showQuickCreate = query.trim().length > 0 && !exactMatch;
+
+  const handleQuickCreate = async () => {
+    if (!query.trim() || isCreating) return;
+    setIsCreating(true);
+    try {
+      const res = await apiFetch('/api/clients', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: query.trim(),
+          hourly_rate: defaultHourlyRate,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.client) {
+        if (onClientCreated) {
+          onClientCreated(data.client);
+        }
+        onSelectClient(data.client.id);
+        setIsOpen(false);
+        setQuery('');
+      }
+    } catch (err: any) {
+      console.error('Error creating client quickly:', err);
+    } finally {
+      setIsCreating(false);
+    }
+  };
 
   return (
     <div className="relative" ref={containerRef}>
@@ -92,7 +129,13 @@ export function ClientAutocomplete({
               setIsOpen(true);
             }}
             onFocus={() => setIsOpen(true)}
-            placeholder="Pesquisar cliente ou projeto por nome/empresa..."
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && showQuickCreate) {
+                e.preventDefault();
+                handleQuickCreate();
+              }
+            }}
+            placeholder="Pesquisar cliente ou digitar para criar rápido..."
             className="w-full rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 pl-9 pr-9 py-2 text-xs font-medium text-neutral-900 dark:text-neutral-100 placeholder:text-neutral-400 shadow-xs focus:outline-none focus:ring-2 focus:ring-neutral-900 dark:focus:ring-neutral-200"
           />
           {query && (
@@ -124,7 +167,24 @@ export function ClientAutocomplete({
             {!selectedClientId && <Check className="w-3.5 h-3.5 text-neutral-600 dark:text-neutral-300" />}
           </div>
 
-          {filteredClients.length === 0 ? (
+          {showQuickCreate && (
+            <div
+              onClick={handleQuickCreate}
+              className="px-3.5 py-2.5 text-xs bg-indigo-50/70 dark:bg-indigo-950/40 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 font-medium cursor-pointer flex items-center justify-between transition-colors"
+            >
+              <span className="flex items-center gap-2 truncate">
+                <Plus className="w-4 h-4 shrink-0" />
+                <span className="truncate">Criar cliente "{query.trim()}" ({formatCurrency(defaultHourlyRate)}/h)</span>
+              </span>
+              {isCreating ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+              ) : (
+                <span className="text-2xs opacity-75 shrink-0">Enter ↵</span>
+              )}
+            </div>
+          )}
+
+          {filteredClients.length === 0 && !showQuickCreate ? (
             <div className="px-3.5 py-4 text-xs text-center text-neutral-400 dark:text-neutral-500">
               Nenhum cliente encontrado para "{query}"
             </div>

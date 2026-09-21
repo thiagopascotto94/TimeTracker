@@ -22,6 +22,7 @@ import { gitRouter } from './server/routes/git';
 import { billingRouter } from './server/routes/billing';
 import { invitesRouter } from './server/routes/invites';
 import { workspacesRouter } from './server/routes/workspaces';
+import { notesRouter } from './server/routes/notes';
 
 const PORT = 3000;
 const HOST = '0.0.0.0';
@@ -143,6 +144,7 @@ async function startServer() {
   app.use('/api/billing', billingRouter);
   app.use('/api/invites', invitesRouter);
   app.use('/api/workspaces', workspacesRouter);
+  app.use('/api/notes', notesRouter);
 
   if (process.env.SENTRY_DSN) {
     try {

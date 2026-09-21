@@ -443,6 +443,53 @@ export const OPENAI_TOOLS: ChatCompletionTool[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'create_note',
+      description:
+        'Cria uma nova anotação / documento rico no módulo de Notas do workspace. Suporta título, formatação completa em Markdown (listas de tarefas com "- [ ]", títulos #, listas, tabelas, código), compartilhamento e fixação.',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: {
+            type: 'string',
+            description: 'Título da nota (ex: "Checklist de Deploy", "Ata de Reunião", "Anotações do Projeto").',
+          },
+          content: {
+            type: 'string',
+            description: 'Conteúdo formatado em Markdown da nota. Pode conter checklists com - [ ] ou - [x], cabeçalhos, tabelas e código.',
+          },
+          is_workspace_shared: {
+            type: 'boolean',
+            description: 'Se true, a nota fica visível para toda a equipe do workspace. Se false, é privada.',
+          },
+          is_pinned: {
+            type: 'boolean',
+            description: 'Se true, fixa a nota no topo da lista de notas.',
+          },
+        },
+        required: ['title', 'content'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_notes',
+      description:
+        'Consulta e pesquisa as anotações existentes do usuário ou compartilhadas no workspace atual.',
+      parameters: {
+        type: 'object',
+        properties: {
+          search: {
+            type: 'string',
+            description: 'Termo opcional de busca para filtrar notas por título ou conteúdo.',
+          },
+        },
+      },
+    },
+  },
 ];
 
 export interface KiloChatParams {
@@ -454,13 +501,14 @@ export interface KiloChatParams {
   tenantId: string;
   userId: string;
   hourlyRate: number;
+  workspaceId?: string;
   executeToolFn: (
     name: string,
     args: any,
     tenantId: string,
     userId: string,
     hourlyRate: number
-  ) => Promise<{ result: any; sessionUpdated?: boolean; clientsUpdated?: boolean }>;
+  ) => Promise<{ result: any; sessionUpdated?: boolean; clientsUpdated?: boolean; notesUpdated?: boolean }>;
 }
 
 /**
@@ -531,6 +579,7 @@ export async function runKiloAgenticChat({
 
   let hasSessionChanged = false;
   let hasClientsChanged = false;
+  let hasNotesChanged = false;
   let finalModelText = '';
 
   while (stepsCount < maxSteps) {
@@ -564,7 +613,7 @@ export async function runKiloAgenticChat({
           console.warn(`Falha ao decodificar argumentos da ferramenta ${toolName}:`, toolCall.function.arguments);
         }
 
-        const { result, sessionUpdated, clientsUpdated } = await executeToolFn(
+        const { result, sessionUpdated, clientsUpdated, notesUpdated } = await executeToolFn(
           toolName,
           toolArgs,
           tenantId,
@@ -574,6 +623,7 @@ export async function runKiloAgenticChat({
 
         if (sessionUpdated) hasSessionChanged = true;
         if (clientsUpdated) hasClientsChanged = true;
+        if (notesUpdated) hasNotesChanged = true;
 
         executedSteps.push({
           step: stepsCount,
@@ -607,6 +657,7 @@ export async function runKiloAgenticChat({
     stepsCount,
     hasSessionChanged,
     hasClientsChanged,
+    hasNotesChanged,
     modelUsed: model,
     provider: 'kilo' as const,
     baseURL,

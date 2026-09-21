@@ -24,9 +24,11 @@ import {
   GitCommit,
   ExternalLink,
   Link as LinkIcon,
+  BookOpen,
 } from 'lucide-react';
 import dayjs from 'dayjs';
 import { TimeSession, TaskItem, Client, Tenant } from '../types';
+import { NotesView } from './NotesView';
 import {
   formatTimeHHMMSS,
   formatCurrency,
@@ -69,6 +71,9 @@ interface TimerViewProps {
   onRefreshData?: () => Promise<void>;
   onNavigateToSettings?: () => void;
   loading: boolean;
+  currentUserId?: string;
+  addToast?: (toast: { title: string; description: string; variant?: 'success' | 'destructive' | 'default' | 'amber' }) => void;
+  onClientCreated?: (client: Client) => void;
 }
 
 export function TimerView({
@@ -89,8 +94,13 @@ export function TimerView({
   onRefreshData,
   onNavigateToSettings,
   loading,
+  currentUserId,
+  addToast: parentAddToast,
+  onClientCreated,
 }: TimerViewProps) {
   const { addToast } = useToast();
+  const effectiveAddToast = parentAddToast || addToast;
+  const [isNotesDrawerOpen, setIsNotesDrawerOpen] = useState(false);
 
   // Git Commit Tasks extraction modal state
   const [gitModalOpen, setGitModalOpen] = useState(false);
@@ -203,6 +213,41 @@ export function TimerView({
       clientDailyAlertTriggeredRef.current = false;
     }
   }, [activeSession?.id]);
+
+  // Global shortcut triggers listener (Alt + S / Shift + Space)
+  useEffect(() => {
+    const handleOpenStop = () => {
+      if (activeSession) {
+        setConfirmStopTitle(activeSession.title || '');
+        setConfirmStopNotes(activeSession.notes || '');
+        setIsStopModalOpen(true);
+      }
+    };
+
+    const handleTriggerStart = () => {
+      if (!activeSession) {
+        const formEl = document.getElementById('new-session-form') as HTMLFormElement | null;
+        if (formEl) {
+          formEl.requestSubmit();
+        } else {
+          onStartSession({
+            title: title.trim() || 'Nova Sessão',
+            notes: null,
+            target_minutes: targetMinutes,
+            previous_session_id: resumeSession?.id || null,
+            client_id: clientId || null,
+          });
+        }
+      }
+    };
+
+    window.addEventListener('cronos:open-stop-modal', handleOpenStop);
+    window.addEventListener('cronos:trigger-start-timer', handleTriggerStart);
+    return () => {
+      window.removeEventListener('cronos:open-stop-modal', handleOpenStop);
+      window.removeEventListener('cronos:trigger-start-timer', handleTriggerStart);
+    };
+  }, [activeSession, title, targetMinutes, resumeSession?.id, clientId, onStartSession]);
 
   // Resilient Timer Loop: Computes delta using Date.now() - start_time
   // Tab Throttling resilience: doesn't rely on 1s cumulative increments
@@ -564,8 +609,17 @@ export function TimerView({
                   )}
                 </div>
 
-                {/* Sound alert toggle and previous session link */}
+                {/* Sound alert toggle, notes drawer button and previous session link */}
                 <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setIsNotesDrawerOpen(true)}
+                    className="px-3 py-2 rounded-lg border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-950/60 text-indigo-900 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
+                    title="Abrir gaveta lateral de notas"
+                  >
+                    <BookOpen className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                    <span className="hidden sm:inline">Notas & TODO</span>
+                  </button>
                   <button
                     onClick={() => setSoundEnabled(!soundEnabled)}
                     className={`p-2 rounded-lg border text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer ${
@@ -805,7 +859,7 @@ export function TimerView({
               </div>
 
               {/* Stop Session Action Button */}
-              <div className="flex justify-center pt-2">
+              <div className="flex flex-col items-center justify-center pt-2 gap-2">
                 <Button
                   variant="destructive"
                   size="lg"
@@ -815,11 +869,18 @@ export function TimerView({
                     setIsStopModalOpen(true);
                   }}
                   disabled={loading}
-                  className="px-8 font-semibold shadow-md gap-2 cursor-pointer"
+                  className="px-8 font-semibold shadow-md gap-2.5 cursor-pointer"
+                  title="Finalizar Sessão de Trabalho (Atalho: Alt + S ou Shift + Espaço)"
                 >
                   <Square className="w-4 h-4 fill-current" />
                   <span>Finalizar Sessão de Trabalho</span>
+                  <kbd className="hidden sm:inline-flex items-center px-1.5 py-0.5 text-2xs font-mono font-medium rounded bg-red-800/60 text-red-200 border border-red-700/60">
+                    Alt+S
+                  </kbd>
                 </Button>
+                <p className="text-2xs text-neutral-400 dark:text-neutral-500 text-center">
+                  Dica: Pressione <kbd className="font-mono text-2xs px-1 py-0.5 rounded bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300 border border-neutral-200 dark:border-neutral-700">Alt + S</kbd> ou <kbd className="font-mono text-2xs px-1 py-0.5 rounded bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300 border border-neutral-200 dark:border-neutral-700">Shift + Espaço</kbd> para finalizar
+                </p>
               </div>
             </CardContent>
           </Card>
@@ -1073,22 +1134,33 @@ export function TimerView({
                   Inicie o cronômetro gerido pelo servidor com objetivo de tempo e vínculo opcional a sessões anteriores.
                 </CardDescription>
               </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setGitModalOpen(true)}
-                className="self-start sm:self-auto h-8 gap-1.5 text-xs border-indigo-200 dark:border-indigo-800/70 bg-indigo-50/50 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 cursor-pointer"
-                title="Extrair tarefas de commits do Git e iniciar sessão com tarefas já aprovadas"
-              >
-                <GitCommit className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
-                <span>Importar Commits (Git)</span>
-              </Button>
+              <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => setIsNotesDrawerOpen(true)}
+                  className="h-8 px-2.5 gap-1.5 text-xs font-medium border border-indigo-200 dark:border-indigo-800/70 bg-indigo-50/70 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 rounded-md transition-colors inline-flex items-center cursor-pointer shadow-xs"
+                  title="Abrir gaveta lateral de notas"
+                >
+                  <BookOpen className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                  <span>Notas & TODO</span>
+                </button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setGitModalOpen(true)}
+                  className="h-8 gap-1.5 text-xs border-indigo-200 dark:border-indigo-800/70 bg-indigo-50/50 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 cursor-pointer"
+                  title="Extrair tarefas de commits do Git e iniciar sessão com tarefas já aprovadas"
+                >
+                  <GitCommit className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+                  <span>Importar Commits (Git)</span>
+                </Button>
+              </div>
             </div>
           </CardHeader>
 
           <CardContent>
-            <form onSubmit={handleStart} className="space-y-6">
+            <form id="new-session-form" onSubmit={handleStart} className="space-y-6">
               {/* Session Title / Description */}
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold text-neutral-700 dark:text-neutral-300">
@@ -1201,6 +1273,7 @@ export function TimerView({
                   selectedClientId={clientId}
                   onSelectClient={setClientId}
                   defaultHourlyRate={hourlyRate}
+                  onClientCreated={onClientCreated}
                 />
 
                 {/* Selected Client Daily Target Status Preview */}
@@ -1237,16 +1310,20 @@ export function TimerView({
               </div>
 
               {/* Action Buttons */}
-              <div className="pt-2">
+              <div className="pt-2 flex flex-col sm:flex-row sm:items-center gap-3">
                 <Button
                   type="submit"
                   size="lg"
                   disabled={loading}
-                  className="w-full sm:w-auto px-8 gap-2 bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 hover:bg-neutral-800 dark:hover:bg-neutral-200 shadow-md font-semibold cursor-pointer"
+                  className="w-full sm:w-auto px-8 gap-2.5 bg-neutral-900 dark:bg-neutral-100 text-white dark:text-neutral-900 hover:bg-neutral-800 dark:hover:bg-neutral-200 shadow-md font-semibold cursor-pointer"
+                  title="Iniciar Cronômetro (Atalho: Alt + S ou Shift + Espaço)"
                 >
                   <Play className="w-4 h-4 fill-current" />
                   <span>Iniciar Cronômetro</span>
                 </Button>
+                <span className="text-2xs text-neutral-500 dark:text-neutral-400">
+                  Dica: Pressione <kbd className="font-mono text-2xs px-1 py-0.5 rounded bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300 border border-neutral-200 dark:border-neutral-700">Alt + S</kbd> ou <kbd className="font-mono text-2xs px-1 py-0.5 rounded bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-300 border border-neutral-200 dark:border-neutral-700">Shift + Espaço</kbd> para iniciar
+                </span>
               </div>
             </form>
           </CardContent>
@@ -1414,6 +1491,35 @@ export function TimerView({
         }}
         onNavigateToSettings={onNavigateToSettings}
       />
+
+      {/* Notes Slide-Over Drawer */}
+      {isNotesDrawerOpen && (
+        <div className="fixed inset-0 z-50 flex justify-end bg-black/50 backdrop-blur-xs transition-opacity">
+          <div className="w-full sm:max-w-2xl bg-white dark:bg-neutral-900 shadow-2xl border-l border-neutral-200 dark:border-neutral-800 flex flex-col h-full">
+            <div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900 shrink-0">
+              <div className="flex items-center gap-2">
+                <BookOpen className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+                <h3 className="font-semibold text-base sm:text-lg text-neutral-900 dark:text-neutral-100">Gaveta de Anotações & TODO</h3>
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setIsNotesDrawerOpen(false)}
+                className="h-8 w-8 p-0 rounded-full hover:bg-neutral-200 dark:hover:bg-neutral-800 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-3 sm:p-6 bg-neutral-50/50 dark:bg-neutral-950/50 min-h-0">
+              <NotesView
+                currentUserId={currentUserId || ''}
+                addToast={effectiveAddToast}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

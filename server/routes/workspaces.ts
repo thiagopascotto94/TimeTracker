@@ -66,6 +66,7 @@ workspacesRouter.get('/', async (req: AuthenticatedRequest, res: Response) => {
         name: ws.name,
         description: ws.description,
         role: m.role,
+        can_view_billing: m.role === 'owner' ? true : (m.can_view_billing !== false),
         members_count: membersCount,
         created_at: ws.created_at,
         updated_at: ws.updated_at,
@@ -379,7 +380,7 @@ workspacesRouter.get('/:id/members', async (req: AuthenticatedRequest, res: Resp
 
     const members = await WorkspaceMember.findAll({
       where: { workspace_id: id },
-      include: [{ model: User, as: 'User', attributes: ['id', 'name', 'email', 'role'] }],
+      include: [{ model: User, as: 'User', attributes: ['id', 'name', 'email', 'role', 'can_view_billing'] }],
     });
 
     return res.json({
@@ -387,7 +388,13 @@ workspacesRouter.get('/:id/members', async (req: AuthenticatedRequest, res: Resp
         id: m.id,
         user_id: m.user_id,
         role: m.role,
-        user: m.User ? { id: m.User.id, name: m.User.name, email: m.User.email } : null,
+        can_view_billing: m.role === 'owner' ? true : (m.can_view_billing !== false),
+        user: m.User ? {
+          id: m.User.id,
+          name: m.User.name,
+          email: m.User.email,
+          can_view_billing: m.User.can_view_billing !== false,
+        } : null,
         created_at: m.created_at,
       })),
     });
@@ -426,7 +433,7 @@ workspacesRouter.post('/:id/members', requireRole('owner', 'admin'), async (req:
       });
     }
 
-    const { email, role } = req.body;
+    const { email, role, can_view_billing } = req.body;
     const currentRole = req.workspaceRole;
 
     if (!email) {
@@ -453,6 +460,7 @@ workspacesRouter.post('/:id/members', requireRole('owner', 'admin'), async (req:
       workspace_id: id,
       user_id: targetUser.id,
       role: requestedRole,
+      can_view_billing: can_view_billing !== undefined ? Boolean(can_view_billing) : true,
     });
 
     return res.status(201).json({
@@ -460,6 +468,7 @@ workspacesRouter.post('/:id/members', requireRole('owner', 'admin'), async (req:
         id: newMember.id,
         user_id: targetUser.id,
         role: newMember.role,
+        can_view_billing: newMember.can_view_billing,
         user: { id: targetUser.id, name: targetUser.name, email: targetUser.email },
       },
       message: 'Membro adicionado com sucesso',
@@ -507,6 +516,72 @@ workspacesRouter.delete('/:id/members/:targetUserId', requireRole('owner', 'admi
   } catch (error) {
     console.error('Error removing member:', error);
     res.status(500).json({ error: 'Erro ao remover membro' });
+  }
+});
+
+// PATCH /api/workspaces/:id/members/:targetUserId - Update member settings (can_view_billing / role)
+workspacesRouter.patch('/:id/members/:targetUserId', requireRole('owner', 'admin'), async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { id, targetUserId } = req.params;
+    const { role, can_view_billing } = req.body;
+
+    const lockCheck = await isWorkspaceLocked(id, req.tenantId!);
+    if (lockCheck.isLocked) {
+      return res.status(403).json({
+        error: 'Este workspace está bloqueado no plano Free.',
+        code: 'WORKSPACE_LOCKED',
+      });
+    }
+
+    const currentRole = req.workspaceRole;
+    const targetMembership = await WorkspaceMember.findOne({ where: { workspace_id: id, user_id: targetUserId } });
+    if (!targetMembership) {
+      return res.status(404).json({ error: 'Membro não encontrado no workspace' });
+    }
+
+    if (targetMembership.role === 'owner') {
+      if (role && role !== 'owner') {
+        return res.status(403).json({ error: 'A função do proprietário não pode ser alterada' });
+      }
+      if (can_view_billing === false) {
+        return res.status(403).json({ error: 'O proprietário sempre possui acesso à visualização do faturamento' });
+      }
+    }
+
+    if (currentRole === 'admin' && targetMembership.role === 'admin' && role && role !== 'admin') {
+      return res.status(403).json({ error: 'Administradores não podem alterar outros administradores' });
+    }
+
+    if (role && targetMembership.role !== 'owner') {
+      if (role === 'admin' && currentRole !== 'owner') {
+        return res.status(403).json({ error: 'Apenas o proprietário pode promover membros a administrador' });
+      }
+      targetMembership.role = role;
+    }
+
+    if (can_view_billing !== undefined) {
+      targetMembership.can_view_billing = Boolean(can_view_billing);
+      await User.update(
+        { can_view_billing: Boolean(can_view_billing) },
+        { where: { id: targetUserId, tenant_id: req.tenantId! } }
+      );
+    }
+
+    await targetMembership.save();
+
+    return res.json({
+      success: true,
+      member: {
+        id: targetMembership.id,
+        user_id: targetMembership.user_id,
+        role: targetMembership.role,
+        can_view_billing: targetMembership.can_view_billing,
+      },
+      message: 'Permissões do membro atualizadas com sucesso',
+    });
+  } catch (error) {
+    console.error('Error updating member:', error);
+    res.status(500).json({ error: 'Erro ao atualizar permissões do membro' });
   }
 });
 

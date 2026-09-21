@@ -2,7 +2,7 @@ import { Router, Response } from 'express';
 import { GoogleGenAI, Type, FunctionDeclaration } from '@google/genai';
 import { Op } from 'sequelize';
 import crypto from 'crypto';
-import { TimeSession, Task, Client, User, AiMessage, ClientContact, Tenant, Workspace } from '../db';
+import { TimeSession, Task, Client, User, AiMessage, ClientContact, Tenant, Workspace, Note } from '../db';
 import { authMiddleware, AuthenticatedRequest } from '../auth';
 import { getKiloConfig, getKiloClient, runKiloAgenticChat } from '../kilo';
 import {
@@ -913,6 +913,49 @@ const suggestTasksFromCommitsDeclaration: FunctionDeclaration = {
   },
 };
 
+const createNoteDeclaration: FunctionDeclaration = {
+  name: 'create_note',
+  description:
+    'Cria uma nova anotação / documento rico no módulo de Notas do workspace. Suporta título, formatação completa em Markdown (listas de tarefas com "- [ ]", títulos #, listas com marcadores, código, tabelas), compartilhamento com o workspace e fixação.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      title: {
+        type: Type.STRING,
+        description: 'Título da nota (ex: "Ata de Reunião", "Checklist de Deploy", "Ideias de Projeto").',
+      },
+      content: {
+        type: Type.STRING,
+        description: 'Conteúdo formatado em Markdown da nota. Pode conter checklists com - [ ] ou - [x], cabeçalhos, listas, blocos de código e links.',
+      },
+      is_workspace_shared: {
+        type: Type.BOOLEAN,
+        description: 'Se true, a nota fica visível para toda a equipe do workspace. Se false, é uma nota privada acessível apenas pelo autor. Padrão: false.',
+      },
+      is_pinned: {
+        type: Type.BOOLEAN,
+        description: 'Se true, fixa a nota no topo da listagem de notas. Padrão: false.',
+      },
+    },
+    required: ['title', 'content'],
+  },
+};
+
+const listNotesDeclaration: FunctionDeclaration = {
+  name: 'list_notes',
+  description:
+    'Consulta e lista as anotações existentes do usuário ou compartilhadas no workspace atual, permitindo pesquisar por palavras-chave.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      search: {
+        type: Type.STRING,
+        description: 'Termo opcional de busca para filtrar notas por título ou conteúdo.',
+      },
+    },
+  },
+};
+
 const AI_TOOLS = [
   searchHistoryDeclaration,
   getActiveSessionDeclaration,
@@ -929,6 +972,8 @@ const AI_TOOLS = [
   getFinancialSummaryDeclaration,
   suggestSessionTitleDeclaration,
   suggestTasksFromCommitsDeclaration,
+  createNoteDeclaration,
+  listNotesDeclaration,
 ];
 
 // Tool Execution Handler with Strict Multi-Tenant Isolation
@@ -937,8 +982,9 @@ async function executeTool(
   args: any,
   tenantId: string,
   userId: string,
-  userHourlyRate: number
-): Promise<{ result: any; sessionUpdated?: boolean; clientsUpdated?: boolean }> {
+  userHourlyRate: number,
+  workspaceId?: string
+): Promise<{ result: any; sessionUpdated?: boolean; clientsUpdated?: boolean; notesUpdated?: boolean }> {
   switch (toolName) {
     case 'get_active_session': {
       const active = await TimeSession.findOne({
@@ -1805,6 +1851,119 @@ async function executeTool(
       };
     }
 
+    case 'create_note': {
+      let wsId = workspaceId;
+      if (!wsId) {
+        const ws = await Workspace.findOne({ where: { tenant_id: tenantId } });
+        wsId = ws?.id;
+      }
+
+      if (!wsId) {
+        return {
+          result: {
+            error: 'Nenhum workspace ativo encontrado para vincular esta nota.',
+          },
+        };
+      }
+
+      const noteTitle = args.title && String(args.title).trim() ? String(args.title).trim() : 'Nova Nota da IA';
+      const noteContent = args.content ? String(args.content) : '';
+      const isShared = Boolean(args.is_workspace_shared);
+      const isPinned = Boolean(args.is_pinned);
+
+      const newNote = await Note.create({
+        tenant_id: tenantId,
+        workspace_id: wsId,
+        user_id: userId,
+        title: noteTitle,
+        content: noteContent,
+        is_workspace_shared: isShared,
+        is_pinned: isPinned,
+      });
+
+      const author = await User.findByPk(userId);
+
+      return {
+        result: {
+          success: true,
+          message: `Nota "${noteTitle}" criada com sucesso no módulo de Notas!`,
+          note: {
+            id: newNote.id,
+            title: newNote.title,
+            content_preview: noteContent.length > 300 ? noteContent.slice(0, 300) + '...' : noteContent,
+            is_workspace_shared: isShared,
+            is_pinned: isPinned,
+            author_name: author?.name || 'Você',
+            created_at: newNote.created_at,
+          },
+        },
+        notesUpdated: true,
+      };
+    }
+
+    case 'list_notes': {
+      let wsId = workspaceId;
+      if (!wsId) {
+        const ws = await Workspace.findOne({ where: { tenant_id: tenantId } });
+        wsId = ws?.id;
+      }
+
+      const whereClause: any = {
+        tenant_id: tenantId,
+        [Op.or]: [
+          { is_workspace_shared: true },
+          { user_id: userId },
+        ],
+      };
+
+      if (wsId) {
+        whereClause.workspace_id = wsId;
+      }
+
+      if (args.search && typeof args.search === 'string' && args.search.trim()) {
+        const term = `%${args.search.trim()}%`;
+        whereClause[Op.and] = [
+          {
+            [Op.or]: [
+              { title: { [Op.like]: term } },
+              { content: { [Op.like]: term } },
+            ],
+          },
+        ];
+      }
+
+      const notes = await Note.findAll({
+        where: whereClause,
+        include: [
+          {
+            model: User,
+            as: 'Author',
+            attributes: ['id', 'name', 'email'],
+          },
+        ],
+        order: [
+          ['is_pinned', 'DESC'],
+          ['updated_at', 'DESC'],
+        ],
+        limit: 20,
+      });
+
+      return {
+        result: {
+          count: notes.length,
+          notes: notes.map((n) => ({
+            id: n.id,
+            title: n.title,
+            content_preview: n.content.length > 250 ? n.content.slice(0, 250) + '...' : n.content,
+            is_pinned: n.is_pinned,
+            is_workspace_shared: n.is_workspace_shared,
+            author: (n as any).Author?.name || 'Você',
+            updated_at: n.updated_at,
+          })),
+        },
+      };
+    }
+
     default:
       return { result: { error: `Ferramenta desconhecida: ${toolName}` } };
   }
@@ -1949,20 +2108,25 @@ Seu papel é ajudar o profissional freelancer, consultor ou equipe a gerenciar s
    - Cada tarefa individual possui sua própria descrição e observações específicas (notes) para links, detalhes técnicos, entregáveis ou impedimentos.
    - Adicione tarefas com add_task_to_timer ou em lote com add_multiple_tasks_to_timer (incluindo description e notes).
    - Atualize tarefas existentes com update_task ou remova com delete_task.
-3. Compartilhamento e Relatórios Públicos:
+3. Criação e Consulta de Notas & Documentos Ricos (Módulo de Notas):
+   - Crie notas, checklists e documentos ricos diretamente no módulo de Notas com create_note.
+   - Escreva conteúdos bem estruturados em Markdown (títulos, subtítulos, checklists com - [ ] ou - [x], tabelas, blocos de código, etc.).
+   - Defina se a nota é compartilhada com o workspace (is_workspace_shared: true) ou privada (false), e se deve ficar fixada no topo (is_pinned: true).
+   - Consulte e pesquise anotações existentes do usuário e da equipe com list_notes.
+4. Compartilhamento e Relatórios Públicos:
    - Gere e envie o link público de aprovação do cliente com get_public_report_link. O cliente pode conferir tarefas, horas e observações em tempo real.
-4. Análise Multimodal de Imagens:
-   - Analise capturas de tela (tickets Jira/Trello/GitHub, checklists, mockups, anotações à mão, recibos ou bugs) e extraia tarefas com suas respectivas observações (notes), adicionando-as diretamente ao timer!
-5. Título Inteligente:
+5. Análise Multimodal de Imagens:
+   - Analise capturas de tela (tickets Jira/Trello/GitHub, checklists, mockups, anotações à mão, recibos ou bugs) e extraia tarefas ou crie notas completas!
+6. Título Inteligente:
    - Use suggest_session_title para sugerir ou aplicar automaticamente um título profissional baseado nas tarefas e observações realizadas.
-6. Histórico, Clientes e Métricas:
+7. Histórico, Clientes e Métricas:
    - Pesquise sessões e tarefas com search_history (que busca em títulos, observações da sessão e tarefas/observações).
    - Consulte ou cadastre clientes com list_clients e create_client (incluindo meta diária de minutos daily_target_minutes, taxa horária, observações contratuais e contatos).
    - Obtenha balanço financeiro e de horas com get_financial_summary.
-7. Extração de Tarefas a partir de Commits do Git:
+8. Extração de Tarefas a partir de Commits do Git:
    - Analise logs de commit, mensagens git ou diffs com suggest_tasks_from_commits para sugerir tarefas estruturadas com título profissional e notas técnicas.
    - Pode adicionar diretamente à sessão ativa se o usuário solicitar ou apenas apresentar para aprovação prévia.
-8. Execução Autônoma em Cadeia:
+9. Execução Autônoma em Cadeia:
    - Execute até 60 etapas autônomas consecutivas para atender solicitações compostas.
 Responda sempre em Português do Brasil com tom profissional, prestativo e objetivo, usando formatação Markdown elegante quando apropriado.`;
 
@@ -2022,7 +2186,7 @@ Responda sempre em Português do Brasil com tom profissional, prestativo e objet
         tenantId,
         userId,
         hourlyRate,
-        executeToolFn: executeTool,
+        executeToolFn: (name, args, tId, uId, rate) => executeTool(name, args, tId, uId, rate, workspaceId),
       });
 
       // Save model response to database
@@ -2043,6 +2207,7 @@ Responda sempre em Português do Brasil com tom profissional, prestativo e objet
         stepCount: kiloResult.stepsCount,
         activeSessionChanged: kiloResult.hasSessionChanged,
         clientsChanged: kiloResult.hasClientsChanged,
+        notesChanged: (kiloResult as any).hasNotesChanged || false,
         provider: 'kilo',
         model: kiloResult.modelUsed,
         usage: updatedUsage,
@@ -2129,6 +2294,7 @@ Responda sempre em Português do Brasil com tom profissional, prestativo e objet
 
     let hasSessionChanged = false;
     let hasClientsChanged = false;
+    let hasNotesChanged = false;
     let finalModelText = '';
 
     const candidateModels = [modelToUse, 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
@@ -2189,16 +2355,18 @@ Responda sempre em Português do Brasil com tom profissional, prestativo e objet
         const toolResponseParts: any[] = [];
 
         for (const call of functionCalls) {
-          const { result, sessionUpdated, clientsUpdated } = await executeTool(
+          const { result, sessionUpdated, clientsUpdated, notesUpdated } = await executeTool(
             call.name,
             call.args,
             tenantId,
             userId,
-            hourlyRate
+            hourlyRate,
+            workspaceId
           );
 
           if (sessionUpdated) hasSessionChanged = true;
           if (clientsUpdated) hasClientsChanged = true;
+          if (notesUpdated) hasNotesChanged = true;
 
           executedSteps.push({
             step: stepsCount,
@@ -2255,6 +2423,7 @@ Responda sempre em Português do Brasil com tom profissional, prestativo e objet
       stepCount: stepsCount,
       activeSessionChanged: hasSessionChanged,
       clientsChanged: hasClientsChanged,
+      notesChanged: hasNotesChanged,
       usage: updatedUsage,
     });
   } catch (err: any) {

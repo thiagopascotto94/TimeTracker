@@ -419,11 +419,20 @@ export function ReportsView({
                 </span>
                 <DollarSign className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
               </div>
-              <div className="mt-2 text-2xl font-bold text-emerald-700 dark:text-emerald-400 font-mono">
-                {formatCurrency(reportData.summary.totalBillableAmount)}
-              </div>
+              {reportData.summary.can_view_billing === false ? (
+                <div className="mt-2 flex items-center gap-1.5 text-lg font-bold text-neutral-400 font-mono">
+                  <Lock className="w-4 h-4 text-neutral-400" />
+                  <span>Restrito</span>
+                </div>
+              ) : (
+                <div className="mt-2 text-2xl font-bold text-emerald-700 dark:text-emerald-400 font-mono">
+                  {formatCurrency(reportData.summary.totalBillableAmount)}
+                </div>
+              )}
               <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
-                Soma exata calculada por sessão/cliente
+                {reportData.summary.can_view_billing === false
+                  ? 'Acesso a valores restrito pelo workspace'
+                  : 'Soma exata calculada por sessão/cliente'}
               </p>
             </CardContent>
           </Card>
@@ -440,14 +449,21 @@ export function ReportsView({
                 <Building2 className="w-4 h-4 text-neutral-400" />
               </div>
               <div className="mt-2 text-2xl font-bold text-neutral-900 dark:text-neutral-100 font-mono">
-                {reportData.summary.selectedClient ? (
+                {reportData.summary.can_view_billing === false ? (
+                  <span className="text-base text-neutral-400 flex items-center gap-1.5">
+                    <Lock className="w-4 h-4" />
+                    Oculto
+                  </span>
+                ) : reportData.summary.selectedClient ? (
                   formatCurrency(reportData.summary.selectedClient.hourly_rate ?? reportData.summary.hourlyRate)
                 ) : (
                   <span className="text-lg">Por Sessão / Cliente</span>
                 )}
               </div>
               <p className="mt-1 text-xs text-neutral-500 dark:text-neutral-400">
-                {reportData.summary.selectedClient
+                {reportData.summary.can_view_billing === false
+                  ? 'Permissão de faturamento desativada'
+                  : reportData.summary.selectedClient
                   ? `Cliente: ${reportData.summary.selectedClient.name}`
                   : `Precificação individual aplicada em cada sessão`}
               </p>
@@ -779,9 +795,11 @@ export function ReportsView({
                 <span className="font-mono text-neutral-700 dark:text-neutral-300">
                   Horas: <strong>{reportData.summary.totalDecimalHours.toFixed(2)}h</strong>
                 </span>
-                <div className="font-medium text-neutral-900 dark:text-neutral-100">
-                  Total Final a Faturar: <strong className="text-emerald-700 dark:text-emerald-400 text-base font-mono ml-1">{formatCurrency(reportData.summary.totalBillableAmount)}</strong>
-                </div>
+                {reportData.summary.can_view_billing !== false && (
+                  <div className="font-medium text-neutral-900 dark:text-neutral-100">
+                    Total Final a Faturar: <strong className="text-emerald-700 dark:text-emerald-400 text-base font-mono ml-1">{formatCurrency(reportData.summary.totalBillableAmount)}</strong>
+                  </div>
+                )}
               </div>
             </div>
           )}

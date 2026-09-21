@@ -546,6 +546,7 @@ export interface UserAttributes {
   password_hash: string;
   default_hourly_rate: number;
   role?: string; // 'admin' | 'member'
+  can_view_billing?: boolean;
 }
 export class User extends Model<UserAttributes> implements UserAttributes {
   public id!: string;
@@ -555,6 +556,7 @@ export class User extends Model<UserAttributes> implements UserAttributes {
   public password_hash!: string;
   public default_hourly_rate!: number;
   public role!: string;
+  public can_view_billing!: boolean;
 }
 User.init(
   {
@@ -589,6 +591,11 @@ User.init(
       type: DataTypes.STRING,
       allowNull: false,
       defaultValue: 'admin',
+    },
+    can_view_billing: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: true,
     },
   },
   {
@@ -717,6 +724,7 @@ export interface WorkspaceMemberAttributes {
   workspace_id: string;
   user_id: string;
   role: string; // 'owner' | 'admin' | 'member'
+  can_view_billing?: boolean;
   created_at?: Date;
   updated_at?: Date;
 }
@@ -725,6 +733,7 @@ export class WorkspaceMember extends Model<WorkspaceMemberAttributes> implements
   public workspace_id!: string;
   public user_id!: string;
   public role!: string;
+  public can_view_billing!: boolean;
   public readonly created_at!: Date;
   public readonly updated_at!: Date;
   public readonly Workspace?: Workspace;
@@ -749,6 +758,11 @@ WorkspaceMember.init(
       type: DataTypes.STRING,
       allowNull: false,
       defaultValue: 'member',
+    },
+    can_view_billing: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: true,
     },
   },
   {
@@ -1569,6 +1583,7 @@ export interface InviteAttributes {
   workspace_id?: string | null;
   email: string;
   role: string; // 'admin' | 'member' | 'guest'
+  can_view_billing?: boolean;
   token: string;
   invited_by_user_id?: string | null;
   status: string; // 'pending' | 'accepted' | 'expired' | 'canceled'
@@ -1582,6 +1597,7 @@ export class Invite extends Model<InviteAttributes> implements InviteAttributes 
   public workspace_id!: string | null;
   public email!: string;
   public role!: string;
+  public can_view_billing!: boolean;
   public token!: string;
   public invited_by_user_id!: string | null;
   public status!: string;
@@ -1616,6 +1632,11 @@ Invite.init(
       allowNull: false,
       defaultValue: 'member',
     },
+    can_view_billing: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: true,
+    },
     token: {
       type: DataTypes.STRING,
       allowNull: false,
@@ -1648,6 +1669,87 @@ Tenant.hasMany(Invite, { foreignKey: 'tenant_id' });
 Invite.belongsTo(Tenant, { foreignKey: 'tenant_id' });
 User.hasMany(Invite, { foreignKey: 'invited_by_user_id', as: 'SentInvites' });
 Invite.belongsTo(User, { foreignKey: 'invited_by_user_id', as: 'Inviter' });
+
+export interface NoteAttributes {
+  id: string;
+  tenant_id: string;
+  workspace_id: string;
+  user_id: string;
+  title: string;
+  content: string;
+  is_workspace_shared: boolean;
+  is_pinned?: boolean;
+  created_at?: Date;
+  updated_at?: Date;
+}
+export class Note extends Model<NoteAttributes> implements NoteAttributes {
+  public id!: string;
+  public tenant_id!: string;
+  public workspace_id!: string;
+  public user_id!: string;
+  public title!: string;
+  public content!: string;
+  public is_workspace_shared!: boolean;
+  public is_pinned!: boolean;
+  public readonly created_at!: Date;
+  public readonly updated_at!: Date;
+  public readonly Author?: User;
+}
+Note.init(
+  {
+    id: {
+      type: DataTypes.STRING,
+      primaryKey: true,
+      defaultValue: () => crypto.randomUUID(),
+    },
+    tenant_id: {
+      type: DataTypes.STRING,
+      allowNull: false,
+    },
+    workspace_id: {
+      type: DataTypes.STRING,
+      allowNull: false,
+    },
+    user_id: {
+      type: DataTypes.STRING,
+      allowNull: false,
+    },
+    title: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      defaultValue: 'Nova Nota',
+    },
+    content: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      defaultValue: '',
+    },
+    is_workspace_shared: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+    },
+    is_pinned: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+    },
+  },
+  {
+    sequelize,
+    modelName: 'Note',
+    tableName: 'notes',
+    underscored: true,
+    timestamps: true,
+  }
+);
+
+Tenant.hasMany(Note, { foreignKey: 'tenant_id' });
+Note.belongsTo(Tenant, { foreignKey: 'tenant_id' });
+Workspace.hasMany(Note, { foreignKey: 'workspace_id' });
+Note.belongsTo(Workspace, { foreignKey: 'workspace_id' });
+User.hasMany(Note, { foreignKey: 'user_id' });
+Note.belongsTo(User, { foreignKey: 'user_id', as: 'Author' });
 
 User.hasMany(RefreshToken, { foreignKey: 'user_id' });
 RefreshToken.belongsTo(User, { foreignKey: 'user_id' });
@@ -1785,6 +1887,11 @@ export async function initDb() {
   // Plan columns migration
   await addColumnIfNotExists('plans', 'max_workspaces', 'INTEGER DEFAULT 1');
   await addColumnIfNotExists('plans', 'max_sessions_per_month', 'INTEGER DEFAULT -1');
+
+  // Can view billing permissions migration
+  await addColumnIfNotExists('users', 'can_view_billing', 'BOOLEAN DEFAULT 1');
+  await addColumnIfNotExists('workspace_members', 'can_view_billing', 'BOOLEAN DEFAULT 1');
+  await addColumnIfNotExists('invites', 'can_view_billing', 'BOOLEAN DEFAULT 1');
 
   // Ensure WorkspaceAiDailyUsage table exists
   await WorkspaceAiDailyUsage.sync();

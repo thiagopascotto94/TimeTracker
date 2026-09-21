@@ -15,6 +15,10 @@ import {
   ShieldCheck,
   Sparkles,
   UserCheck,
+  FileText,
+  Keyboard,
+  Search,
+  Command,
 } from 'lucide-react';
 import { User, Tenant, TimeSession } from '../types';
 import { formatCurrency } from '../utils/format';
@@ -23,8 +27,8 @@ import { Button } from './ui/button';
 import { WorkspaceSelector } from './WorkspaceSelector';
 
 interface NavbarProps {
-  activeTab: 'timer' | 'reports' | 'history' | 'clients' | 'settings' | 'assistant' | 'linked-clients';
-  setActiveTab: (tab: 'timer' | 'reports' | 'history' | 'clients' | 'settings' | 'assistant' | 'linked-clients') => void;
+  activeTab: 'timer' | 'reports' | 'history' | 'clients' | 'notes' | 'settings' | 'assistant' | 'linked-clients';
+  setActiveTab: (tab: 'timer' | 'reports' | 'history' | 'clients' | 'notes' | 'settings' | 'assistant' | 'linked-clients') => void;
   user: User | null;
   tenant: Tenant | null;
   activeSession: TimeSession | null;
@@ -33,6 +37,8 @@ interface NavbarProps {
   onToggleTheme: () => void;
   onWorkspaceChange?: () => void;
   linkedClientsCount?: number;
+  onOpenCommandPalette?: () => void;
+  onOpenShortcutsHelp?: () => void;
 }
 
 export function Navbar({
@@ -46,10 +52,12 @@ export function Navbar({
   onToggleTheme,
   onWorkspaceChange,
   linkedClientsCount = 0,
+  onOpenCommandPalette,
+  onOpenShortcutsHelp,
 }: NavbarProps) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  const handleTabSelect = (tab: 'timer' | 'reports' | 'history' | 'clients' | 'settings' | 'assistant' | 'linked-clients') => {
+  const handleTabSelect = (tab: 'timer' | 'reports' | 'history' | 'clients' | 'notes' | 'settings' | 'assistant' | 'linked-clients') => {
     setActiveTab(tab);
     setMobileMenuOpen(false);
   };
@@ -134,15 +142,15 @@ export function Navbar({
             </button>
 
             <button
-              onClick={() => handleTabSelect('assistant')}
+              onClick={() => handleTabSelect('notes')}
               className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors cursor-pointer ${
-                activeTab === 'assistant'
-                  ? 'bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 shadow-2xs font-semibold border border-indigo-200/80 dark:border-indigo-800/80'
+                activeTab === 'notes'
+                  ? 'bg-neutral-100 dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 shadow-2xs font-semibold'
                   : 'text-neutral-600 dark:text-neutral-400 hover:bg-neutral-50 dark:hover:bg-neutral-800/60 hover:text-neutral-900 dark:hover:text-neutral-100'
               }`}
             >
-              <Sparkles className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
-              <span>Cronos AI</span>
+              <FileText className="h-4 w-4 text-indigo-500" />
+              <span>Notas &amp; TODO</span>
             </button>
           </nav>
 
@@ -161,6 +169,33 @@ export function Navbar({
             >
               <Settings className="h-4 w-4" />
             </button>
+
+            {/* Command Palette Trigger Button */}
+            {onOpenCommandPalette && (
+              <button
+                onClick={onOpenCommandPalette}
+                className="hidden lg:flex items-center gap-2 h-9 px-2.5 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800/80 text-xs font-medium text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors cursor-pointer"
+                title="Abrir comandos rápidos (Atalho: Ctrl + K ou ⌘K)"
+              >
+                <Search className="h-3.5 w-3.5 text-neutral-400" />
+                <span>Buscar...</span>
+                <kbd className="px-1.5 py-0.5 text-[10px] font-mono rounded bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-700 text-neutral-500 dark:text-neutral-400 shadow-2xs">
+                  ⌘K
+                </kbd>
+              </button>
+            )}
+
+            {/* Shortcuts Help Modal Trigger */}
+            {onOpenShortcutsHelp && (
+              <button
+                onClick={onOpenShortcutsHelp}
+                className="flex h-9 w-9 items-center justify-center rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors cursor-pointer"
+                title="Ver Atalhos de Teclado (Atalho: ?)"
+                aria-label="Atalhos de teclado"
+              >
+                <Keyboard className="h-4 w-4" />
+              </button>
+            )}
 
             {/* Dark Theme Toggle Button */}
             <button
@@ -448,6 +483,18 @@ export function Navbar({
         >
           <Briefcase className="h-5 w-5" />
           <span className="text-[10px] mt-1">Clientes</span>
+        </button>
+
+        <button
+          onClick={() => handleTabSelect('notes')}
+          className={`flex flex-col items-center justify-center py-1.5 px-3 min-w-[64px] min-h-[44px] rounded-lg transition-colors cursor-pointer ${
+            activeTab === 'notes'
+              ? 'text-neutral-900 dark:text-neutral-100 font-semibold'
+              : 'text-neutral-500 dark:text-neutral-400 hover:text-neutral-700'
+          }`}
+        >
+          <FileText className="h-5 w-5 text-indigo-500" />
+          <span className="text-[10px] mt-1">Notas</span>
         </button>
       </nav>
     </>

@@ -20,6 +20,7 @@ export interface AuthenticatedRequest extends Request {
   workspace?: Workspace;
   workspaceId?: string;
   workspaceRole?: string;
+  canViewBilling?: boolean;
 }
 
 export async function authMiddleware(
@@ -173,9 +174,12 @@ export async function authMiddleware(
       req.workspace = workspace;
       req.workspaceId = workspace.id;
       req.workspaceRole = membership.role;
+      req.canViewBilling = membership.role === 'owner' ? true : (membership.can_view_billing !== false && user.can_view_billing !== false);
       if (req.session) {
         req.session.workspaceId = workspace.id;
       }
+    } else {
+      req.canViewBilling = user.role === 'admin' ? true : (user.can_view_billing !== false);
     }
 
     next();

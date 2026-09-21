@@ -418,6 +418,8 @@ authRouter.get('/me', authMiddleware, async (req: AuthenticatedRequest, res: Res
         tenant_id: user.tenant_id,
         name: user.name,
         email: user.email,
+        role: user.role,
+        can_view_billing: req.canViewBilling ?? (user.can_view_billing !== false),
         default_hourly_rate: user.default_hourly_rate,
       },
       tenant: {

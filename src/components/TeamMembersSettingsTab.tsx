@@ -28,6 +28,7 @@ interface MemberItem {
   email: string;
   role: string;
   default_hourly_rate: number;
+  can_view_billing?: boolean;
   created_at: string;
 }
 
@@ -35,6 +36,7 @@ interface InviteItem {
   id: string;
   email: string;
   role: 'admin' | 'member';
+  can_view_billing?: boolean;
   status: 'pending' | 'accepted' | 'expired' | 'canceled';
   token: string;
   expires_at: string;
@@ -71,10 +73,12 @@ export function TeamMembersSettingsTab({
   // Modal / Form state
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState<'member' | 'admin'>('member');
+  const [inviteCanViewBilling, setInviteCanViewBilling] = useState(true);
   const [sendingInvite, setSendingInvite] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
   const [cancelingId, setCancelingId] = useState<string | null>(null);
+  const [updatingMemberId, setUpdatingMemberId] = useState<string | null>(null);
 
   const fetchData = async () => {
     try {
@@ -138,6 +142,7 @@ export function TeamMembersSettingsTab({
         body: JSON.stringify({
           email: inviteEmail.trim().toLowerCase(),
           role: inviteRole,
+          can_view_billing: inviteCanViewBilling,
         }),
       });
 
@@ -154,6 +159,7 @@ export function TeamMembersSettingsTab({
 
       setInviteEmail('');
       setInviteRole('member');
+      setInviteCanViewBilling(true);
       fetchData();
     } catch (err: any) {
       setFormError(err.message || 'Erro ao enviar convite');
@@ -164,6 +170,48 @@ export function TeamMembersSettingsTab({
       });
     } finally {
       setSendingInvite(false);
+    }
+  };
+
+  const handleToggleBilling = async (memberId: string, currentVal: boolean) => {
+    const nextVal = !currentVal;
+    try {
+      setUpdatingMemberId(memberId);
+      // Optimistic update
+      setMembers((prev) =>
+        prev.map((m) => (m.id === memberId ? { ...m, can_view_billing: nextVal } : m))
+      );
+
+      const res = await apiFetch(`/api/invites/members/${memberId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ can_view_billing: nextVal }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Falha ao atualizar permissões');
+      }
+
+      addToast({
+        title: 'Permissão atualizada',
+        description: nextVal
+          ? 'O membro agora pode visualizar relatórios e valores de faturamento.'
+          : 'O membro não tem mais acesso a valores e relatórios de faturamento.',
+        variant: 'success',
+      });
+    } catch (err: any) {
+      // Revert on error
+      setMembers((prev) =>
+        prev.map((m) => (m.id === memberId ? { ...m, can_view_billing: currentVal } : m))
+      );
+      addToast({
+        title: 'Erro ao atualizar',
+        description: err.message,
+        variant: 'destructive',
+      });
+    } finally {
+      setUpdatingMemberId(null);
     }
   };
 
@@ -370,6 +418,28 @@ export function TeamMembersSettingsTab({
                   </Button>
                 </div>
               </div>
+
+              {/* Permission Checkbox for Billing */}
+              <div className="pt-2 border-t border-neutral-100 dark:border-neutral-800/60 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                <label
+                  id="invite-billing-permission-label"
+                  className="inline-flex items-center gap-2 cursor-pointer select-none"
+                >
+                  <input
+                    id="invite-can-view-billing-checkbox"
+                    type="checkbox"
+                    checked={inviteCanViewBilling}
+                    onChange={(e) => setInviteCanViewBilling(e.target.checked)}
+                    className="w-4 h-4 rounded border-neutral-300 dark:border-neutral-700 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                  />
+                  <span className="text-xs font-medium text-neutral-800 dark:text-neutral-200">
+                    Permitir visualização dos valores de faturamento
+                  </span>
+                </label>
+                <span className="text-2xs text-neutral-500 dark:text-neutral-400">
+                  Se desmarcado, o membro terá acesso apenas às horas trabalhadas e tarefas, sem dados monetários.
+                </span>
+              </div>
             </form>
           )}
         </CardContent>
@@ -390,6 +460,7 @@ export function TeamMembersSettingsTab({
                 <tr>
                   <th className="px-4 py-2.5 font-semibold">Nome &amp; E-mail</th>
                   <th className="px-4 py-2.5 font-semibold">Função</th>
+                  <th className="px-4 py-2.5 font-semibold text-center">Ver Faturamento</th>
                   <th className="px-4 py-2.5 font-semibold">Taxa Padrão</th>
                   <th className="px-4 py-2.5 font-semibold">Membro Desde</th>
                 </tr>
@@ -429,6 +500,44 @@ export function TeamMembersSettingsTab({
                         {m.role === 'admin' ? 'Administrador' : 'Membro'}
                       </Badge>
                     </td>
+                    <td className="px-4 py-3 text-center">
+                      {m.id === currentUser?.id || m.role === 'admin' ? (
+                        <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 text-2xs font-medium">
+                          <Check className="w-3 h-3 text-emerald-600" />
+                          <span>{m.id === currentUser?.id ? 'Total (Você)' : 'Administrador'}</span>
+                        </div>
+                      ) : (
+                        <label
+                          id={`member-billing-toggle-${m.id}`}
+                          className="inline-flex items-center gap-1.5 cursor-pointer select-none"
+                          title={m.can_view_billing !== false ? 'Clique para ocultar valores' : 'Clique para liberar valores'}
+                        >
+                          <input
+                            type="checkbox"
+                            id={`checkbox-member-billing-${m.id}`}
+                            checked={m.can_view_billing !== false}
+                            disabled={updatingMemberId === m.id}
+                            onChange={() => handleToggleBilling(m.id, m.can_view_billing !== false)}
+                            className="w-4 h-4 rounded border-neutral-300 dark:border-neutral-700 text-indigo-600 focus:ring-indigo-500 cursor-pointer disabled:opacity-50"
+                          />
+                          <span
+                            className={`text-2xs font-semibold ${
+                              m.can_view_billing !== false
+                                ? 'text-emerald-700 dark:text-emerald-400'
+                                : 'text-neutral-500 dark:text-neutral-400'
+                            }`}
+                          >
+                            {updatingMemberId === m.id ? (
+                              <Loader2 className="w-3 h-3 animate-spin inline" />
+                            ) : m.can_view_billing !== false ? (
+                              'Liberado'
+                            ) : (
+                              'Oculto'
+                            )}
+                          </span>
+                        </label>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-neutral-700 dark:text-neutral-300 font-mono">
                       R$ {Number(m.default_hourly_rate || 0).toFixed(2)}/h
                     </td>
@@ -462,6 +571,7 @@ export function TeamMembersSettingsTab({
                   <tr>
                     <th className="px-4 py-2.5 font-semibold">E-mail Convidado</th>
                     <th className="px-4 py-2.5 font-semibold">Função</th>
+                    <th className="px-4 py-2.5 font-semibold text-center">Ver Faturamento</th>
                     <th className="px-4 py-2.5 font-semibold">Expira em</th>
                     <th className="px-4 py-2.5 font-semibold text-right">Ações</th>
                   </tr>
@@ -475,6 +585,18 @@ export function TeamMembersSettingsTab({
                       <td className="px-4 py-3">
                         <Badge variant="outline" className="text-2xs">
                           {inv.role === 'admin' ? 'Administrador' : 'Membro'}
+                        </Badge>
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <Badge
+                          variant="outline"
+                          className={`text-2xs ${
+                            inv.can_view_billing !== false
+                              ? 'bg-emerald-50 dark:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800'
+                              : 'bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 border-neutral-200 dark:border-neutral-700'
+                          }`}
+                        >
+                          {inv.can_view_billing !== false ? 'Liberado' : 'Oculto'}
                         </Badge>
                       </td>
                       <td className="px-4 py-3 text-neutral-500 dark:text-neutral-400 text-2xs">

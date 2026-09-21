@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
-import { Invite, User, Tenant } from '../db';
+import { Invite, User, Tenant, Workspace, WorkspaceMember } from '../db';
 import { authMiddleware, AuthenticatedRequest } from '../auth';
 import { checkPlanLimit } from '../billing';
 import { generateAccessToken, generateRefreshToken } from '../jwt';
@@ -119,6 +119,9 @@ invitesRouter.post('/:token/accept', async (req: Request, res: Response) => {
       // Update user's workspace and role
       user.tenant_id = invite.tenant_id;
       user.role = invite.role || 'member';
+      if (invite.can_view_billing !== undefined) {
+        user.can_view_billing = invite.can_view_billing;
+      }
       if (name && name.trim()) user.name = name.trim();
       await user.save();
     } else {
@@ -140,7 +143,27 @@ invitesRouter.post('/:token/accept', async (req: Request, res: Response) => {
         password_hash,
         default_hourly_rate: 150.0,
         role: invite.role || 'member',
+        can_view_billing: invite.can_view_billing !== false,
       });
+    }
+
+    // Ensure WorkspaceMember records exist for this user in tenant workspaces
+    const tenantWorkspaces = await Workspace.findAll({ where: { tenant_id: invite.tenant_id } });
+    for (const ws of tenantWorkspaces) {
+      const existingMember = await WorkspaceMember.findOne({
+        where: { workspace_id: ws.id, user_id: user.id },
+      });
+      if (!existingMember) {
+        await WorkspaceMember.create({
+          workspace_id: ws.id,
+          user_id: user.id,
+          role: invite.role || 'member',
+          can_view_billing: invite.can_view_billing !== false,
+        });
+      } else {
+        existingMember.can_view_billing = invite.can_view_billing !== false;
+        await existingMember.save();
+      }
     }
 
     // Mark invite as accepted
@@ -215,7 +238,7 @@ invitesRouter.get('/', authMiddleware, async (req: AuthenticatedRequest, res: Re
       }),
       User.findAll({
         where: { tenant_id: tenantId },
-        attributes: ['id', 'name', 'email', 'role', 'default_hourly_rate', 'created_at'],
+        attributes: ['id', 'name', 'email', 'role', 'default_hourly_rate', 'can_view_billing', 'created_at'],
         order: [['name', 'ASC']],
       }),
     ]);
@@ -240,7 +263,7 @@ invitesRouter.post(
   checkPlanLimit('users'),
   async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const { email, role } = req.body;
+      const { email, role, can_view_billing } = req.body;
       const tenantId = req.tenantId!;
       const user = req.user!;
       const tenant = req.tenant!;
@@ -287,6 +310,7 @@ invitesRouter.post(
         // Refresh existing pending invite
         invite.token = token;
         invite.role = role || invite.role || 'member';
+        invite.can_view_billing = can_view_billing !== undefined ? Boolean(can_view_billing) : true;
         invite.expires_at = expiresAt;
         invite.invited_by_user_id = user.id;
         await invite.save();
@@ -296,6 +320,7 @@ invitesRouter.post(
           tenant_id: tenantId,
           email: cleanEmail,
           role: role || 'member',
+          can_view_billing: can_view_billing !== undefined ? Boolean(can_view_billing) : true,
           token,
           invited_by_user_id: user.id,
           status: 'pending',
@@ -324,6 +349,7 @@ invitesRouter.post(
           id: invite.id,
           email: invite.email,
           role: invite.role,
+          can_view_billing: invite.can_view_billing,
           status: invite.status,
           expires_at: invite.expires_at,
           created_at: invite.created_at,
@@ -365,5 +391,68 @@ invitesRouter.delete('/:id', authMiddleware, async (req: AuthenticatedRequest, r
   } catch (err: any) {
     console.error('Error canceling invite:', err);
     return res.status(500).json({ error: 'Erro ao cancelar convite' });
+  }
+});
+
+/**
+ * PATCH /api/invites/members/:userId (Protected)
+ * Updates member settings like role or can_view_billing
+ */
+invitesRouter.patch('/members/:userId', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { userId } = req.params;
+    const { can_view_billing, role } = req.body;
+    const tenantId = req.tenantId!;
+
+    // Check if requester has admin/owner privilege
+    if (req.user?.role !== 'admin' && req.workspaceRole !== 'owner' && req.workspaceRole !== 'admin') {
+      return res.status(403).json({ error: 'Apenas administradores podem alterar permissões de membros' });
+    }
+
+    const targetUser = await User.findOne({ where: { id: userId, tenant_id: tenantId } });
+    if (!targetUser) {
+      return res.status(404).json({ error: 'Membro não encontrado' });
+    }
+
+    // Owner protection
+    if (targetUser.id === req.userId && can_view_billing === false) {
+      return res.status(400).json({ error: 'Você não pode revogar seu próprio acesso ao faturamento' });
+    }
+
+    if (can_view_billing !== undefined) {
+      targetUser.can_view_billing = Boolean(can_view_billing);
+    }
+    if (role && (role === 'admin' || role === 'member')) {
+      targetUser.role = role;
+    }
+
+    await targetUser.save();
+
+    // Update all WorkspaceMember records for this user in this tenant
+    if (can_view_billing !== undefined) {
+      const tenantWorkspaces = await Workspace.findAll({ where: { tenant_id: tenantId }, attributes: ['id'] });
+      const wsIds = tenantWorkspaces.map((w) => w.id);
+      if (wsIds.length > 0) {
+        await WorkspaceMember.update(
+          { can_view_billing: Boolean(can_view_billing) },
+          { where: { user_id: userId, workspace_id: wsIds } }
+        );
+      }
+    }
+
+    return res.json({
+      success: true,
+      member: {
+        id: targetUser.id,
+        name: targetUser.name,
+        email: targetUser.email,
+        role: targetUser.role,
+        can_view_billing: targetUser.can_view_billing,
+      },
+      message: 'Permissões do membro atualizadas com sucesso',
+    });
+  } catch (err: any) {
+    console.error('Error updating member:', err);
+    return res.status(500).json({ error: 'Erro ao atualizar membro' });
   }
 });
