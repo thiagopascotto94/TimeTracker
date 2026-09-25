@@ -5,6 +5,7 @@ export interface Tenant {
   default_target_minutes?: number | null;
   default_client_daily_target_minutes?: number | null;
   monthly_billing_goal?: number | null;
+  max_retroactive_minutes?: number | null;
   git_provider?: 'github' | 'gitlab' | null;
   github_repo?: string | null;
   github_token?: string | null;
@@ -12,6 +13,7 @@ export interface Tenant {
   gitlab_project?: string | null;
   gitlab_token?: string | null;
   allowed_repositories?: string | null;
+  timezone?: string;
   created_at?: string;
 }
 
@@ -57,6 +59,7 @@ export interface User {
   role?: string;
   can_view_billing?: boolean;
   default_hourly_rate: number;
+  timezone?: string;
 }
 
 export interface WorkspaceInvite {
@@ -83,6 +86,7 @@ export interface WorkspaceMember {
   role: string;
   can_view_billing?: boolean;
   default_hourly_rate: number;
+  weekly_target_hours?: number | null;
   created_at: string;
 }
 
@@ -95,6 +99,8 @@ export interface WorkspaceItem {
   members_count: number;
   is_active: boolean;
   order_index?: number;
+  timezone?: string;
+  max_retroactive_minutes?: number | null;
   is_locked?: boolean;
   lock_reason?: string | null;
   created_at?: string;
@@ -131,6 +137,9 @@ export interface TimeSession {
   previous_session_id?: string | null;
   public_token?: string | null;
   hourly_rate?: number | null;
+  is_retroactive?: boolean;
+  retroactive_reason?: string | null;
+  retroactive_minutes?: number | null;
   is_locked?: boolean;
   locked_at?: string | null;
   locked_reason?: string | null;
@@ -508,4 +517,26 @@ export interface NoteItem {
     email: string;
     avatar_url?: string | null;
   };
+}
+
+export interface WorkspaceMemberGoal {
+  userId: string;
+  name: string;
+  email: string;
+  role: string;
+  weekly_target_hours: number | null;
+  logged_hours_week: number;
+  projected_hours_week: number;
+  week_progress_percent: number;
+  week_status: 'met' | 'on_track' | 'behind' | 'no_goal';
+}
+
+export interface TeamGoalsSummary {
+  total_members_with_goals: number;
+  members_met_goal: number;
+  team_overall_completion_rate: number;
+  total_logged_hours: number;
+  total_target_hours: number;
+  projected_team_hours: number;
+  members: WorkspaceMemberGoal[];
 }

@@ -381,3 +381,238 @@ publicRouter.post('/shared/:token/review', async (req: Request, res: Response) =
     res.status(500).json({ error: 'Erro ao processar aprovação/rejeição' });
   }
 });
+
+// In-memory cache for link metadata
+interface LinkMetadata {
+  url: string;
+  originalUrl: string;
+  hostname: string;
+  title: string | null;
+  description: string | null;
+  image: string | null;
+  siteName: string | null;
+  favicon: string | null;
+  cachedAt: number;
+}
+const linkMetadataCache = new Map<string, LinkMetadata>();
+
+function decodeHtmlEntities(str: string): string {
+  if (!str) return '';
+  return str
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&#x27;/g, "'")
+    .replace(/&#x2F;/g, '/')
+    .replace(/&#(\d+);/g, (_, dec) => {
+      try {
+        return String.fromCharCode(parseInt(dec, 10));
+      } catch {
+        return '';
+      }
+    })
+    .replace(/&nbsp;/g, ' ')
+    .trim();
+}
+
+function extractMetaTag(html: string, propertyOrName: string): string | null {
+  const p1 = new RegExp(
+    `<meta\\s+[^>]*(?:property|name)=["']${propertyOrName}["'][^>]*content=["']([^"']*)["']`,
+    'i'
+  );
+  const p2 = new RegExp(
+    `<meta\\s+[^>]*content=["']([^"']*)["'][^>]*\\s+(?:property|name)=["']${propertyOrName}["']`,
+    'i'
+  );
+
+  const m1 = html.match(p1);
+  if (m1 && m1[1]) return decodeHtmlEntities(m1[1]);
+
+  const m2 = html.match(p2);
+  if (m2 && m2[1]) return decodeHtmlEntities(m2[1]);
+
+  return null;
+}
+
+function isSafeUrl(rawUrl: string): boolean {
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return false;
+    }
+    const host = parsed.hostname.toLowerCase();
+    if (
+      host === 'localhost' ||
+      host.endsWith('.local') ||
+      host.endsWith('.internal') ||
+      host === '127.0.0.1' ||
+      host === '0.0.0.0' ||
+      host === '::1' ||
+      host === '[::1]'
+    ) {
+      return false;
+    }
+    if (/^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|169\.254\.)/.test(host)) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// GET /api/public/link-metadata?url=...
+publicRouter.get('/link-metadata', async (req: Request, res: Response) => {
+  const targetUrl = typeof req.query.url === 'string' ? req.query.url.trim() : '';
+
+  if (!targetUrl || !isSafeUrl(targetUrl)) {
+    return res.status(400).json({ error: 'URL inválida ou não permitida' });
+  }
+
+  // Check cache (valid for 1 hour)
+  const cached = linkMetadataCache.get(targetUrl);
+  if (cached && Date.now() - cached.cachedAt < 3600000) {
+    return res.json(cached);
+  }
+
+  let hostname = '';
+  try {
+    hostname = new URL(targetUrl).hostname;
+  } catch {
+    return res.status(400).json({ error: 'URL inválida' });
+  }
+
+  const defaultFavicon = `https://www.google.com/s2/favicons?domain=${hostname}&sz=128`;
+  const fallbackResult: LinkMetadata = {
+    url: targetUrl,
+    originalUrl: targetUrl,
+    hostname,
+    title: hostname,
+    description: null,
+    image: null,
+    siteName: hostname,
+    favicon: defaultFavicon,
+    cachedAt: Date.now(),
+  };
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4500);
+
+    const response = await fetch(targetUrl, {
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 (compatible; CronosBot/1.0)',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
+      },
+      redirect: 'follow',
+    });
+
+    clearTimeout(timeout);
+
+    const finalUrl = response.url || targetUrl;
+    let finalHost = hostname;
+    try {
+      finalHost = new URL(finalUrl).hostname;
+    } catch {}
+
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType.includes('text/html') && !contentType.includes('application/xhtml+xml')) {
+      const nonHtmlResult: LinkMetadata = {
+        url: finalUrl,
+        originalUrl: targetUrl,
+        hostname: finalHost,
+        title: finalHost,
+        description: null,
+        image: null,
+        siteName: finalHost,
+        favicon: `https://www.google.com/s2/favicons?domain=${finalHost}&sz=128`,
+        cachedAt: Date.now(),
+      };
+      linkMetadataCache.set(targetUrl, nonHtmlResult);
+      return res.json(nonHtmlResult);
+    }
+
+    // Read only up to 250KB of HTML to be fast
+    const reader = response.body?.getReader();
+    let html = '';
+    if (reader) {
+      const decoder = new TextDecoder();
+      let bytesRead = 0;
+      while (bytesRead < 256000) {
+        const { done, value } = await reader.read();
+        if (done || !value) break;
+        bytesRead += value.byteLength;
+        html += decoder.decode(value, { stream: true });
+        if (html.includes('</head>')) break;
+      }
+      reader.cancel().catch(() => {});
+    } else {
+      const text = await response.text();
+      html = text.slice(0, 256000);
+    }
+
+    // Extract OpenGraph / Meta information
+    const ogTitle = extractMetaTag(html, 'og:title');
+    const twitterTitle = extractMetaTag(html, 'twitter:title');
+    const titleMatch = html.match(/<title[^>]*>([^<]*)<\/title>/i);
+    const docTitle = titleMatch ? decodeHtmlEntities(titleMatch[1]) : null;
+    const resolvedTitle = ogTitle || twitterTitle || docTitle || finalHost;
+
+    const ogDescription = extractMetaTag(html, 'og:description');
+    const twitterDescription = extractMetaTag(html, 'twitter:description');
+    const metaDescription = extractMetaTag(html, 'description');
+    const resolvedDescription = ogDescription || twitterDescription || metaDescription || null;
+
+    const ogSiteName = extractMetaTag(html, 'og:site_name');
+    const resolvedSiteName = ogSiteName || finalHost;
+
+    let resolvedImage: string | null = null;
+    const rawImage =
+      extractMetaTag(html, 'og:image') ||
+      extractMetaTag(html, 'og:image:url') ||
+      extractMetaTag(html, 'twitter:image') ||
+      extractMetaTag(html, 'twitter:image:src');
+    if (rawImage) {
+      try {
+        resolvedImage = new URL(rawImage, finalUrl).href;
+      } catch {}
+    }
+
+    let resolvedFavicon: string | null = null;
+    const iconMatch =
+      html.match(/<link\s+[^>]*rel=["'](?:shortcut\s+)?icon|apple-touch-icon["'][^>]*href=["']([^"']*)["']/i) ||
+      html.match(/<link\s+[^>]*href=["']([^"']*)["'][^>]*rel=["'](?:shortcut\s+)?icon|apple-touch-icon["']/i);
+    if (iconMatch && iconMatch[1]) {
+      try {
+        resolvedFavicon = new URL(iconMatch[1], finalUrl).href;
+      } catch {}
+    }
+    if (!resolvedFavicon) {
+      resolvedFavicon = `https://www.google.com/s2/favicons?domain=${finalHost}&sz=128`;
+    }
+
+    const result: LinkMetadata = {
+      url: finalUrl,
+      originalUrl: targetUrl,
+      hostname: finalHost,
+      title: resolvedTitle,
+      description: resolvedDescription,
+      image: resolvedImage,
+      siteName: resolvedSiteName,
+      favicon: resolvedFavicon,
+      cachedAt: Date.now(),
+    };
+
+    linkMetadataCache.set(targetUrl, result);
+    return res.json(result);
+  } catch (err) {
+    // If fetching failed (e.g. timeout, site blocks bots), return the fallback
+    linkMetadataCache.set(targetUrl, fallbackResult);
+    return res.json(fallbackResult);
+  }
+});

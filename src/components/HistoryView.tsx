@@ -23,6 +23,7 @@ import {
   ExternalLink,
   Copy,
   Search,
+  History,
 } from 'lucide-react';
 import dayjs from 'dayjs';
 import { TimeSession, Client } from '../types';
@@ -40,6 +41,7 @@ import { Dialog } from './ui/dialog';
 import { ClientFilterAutocomplete } from './ClientFilterAutocomplete';
 import { EmptyState } from './ui/empty-state';
 import { apiFetch } from '../utils/api';
+import { TaskLinkCard } from './TaskLinkCard';
 
 interface EditTaskItem {
   id?: string;
@@ -428,6 +430,16 @@ export function HistoryView({
                               R$ {Number(s.hourly_rate).toFixed(2)}/h
                             </Badge>
                           )}
+                          {s.is_retroactive ? (
+                            <Badge
+                              variant="outline"
+                              className="text-2xs gap-1 text-purple-700 dark:text-purple-300 border-purple-300 dark:border-purple-800 bg-purple-50/60 dark:bg-purple-950/40"
+                              title={s.retroactive_reason ? `Início Retroativo: "${s.retroactive_reason}"` : 'Início Retroativo'}
+                            >
+                              <History className="w-2.5 h-2.5 text-purple-600 dark:text-purple-400" />
+                              <span>Retroativo ({s.retroactive_minutes || 0}m)</span>
+                            </Badge>
+                          ) : null}
                           {s.notes && (
                             <button
                               type="button"
@@ -448,6 +460,19 @@ export function HistoryView({
                               Observação da sessão:
                             </span>
                             {s.notes}
+                          </div>
+                        )}
+
+                        {/* Retroactive Info */}
+                        {s.is_retroactive && s.retroactive_reason && (
+                          <div className="mt-1.5 p-2 rounded-md bg-purple-50/70 dark:bg-purple-950/30 border border-purple-200/70 dark:border-purple-800/50 text-xs text-purple-950 dark:text-purple-200 flex items-start gap-1.5">
+                            <History className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400 shrink-0 mt-0.5" />
+                            <div>
+                              <span className="font-semibold text-2xs text-purple-800 dark:text-purple-300 block uppercase tracking-wide">
+                                Início Retroativo ({s.retroactive_minutes || 0}m atrás):
+                              </span>
+                              <span>"{s.retroactive_reason}"</span>
+                            </div>
                           </div>
                         )}
 
@@ -608,7 +633,7 @@ export function HistoryView({
                             {tasks.map((t) => (
                               <li
                                 key={t.id}
-                                className="text-xs text-neutral-700 dark:text-neutral-300"
+                                className="text-xs text-neutral-700 dark:text-neutral-300 space-y-1.5"
                               >
                                 <div className="flex items-start justify-between gap-2">
                                   <div className="flex items-start gap-1.5 flex-1 min-w-0">
@@ -640,6 +665,9 @@ export function HistoryView({
                                       </button>
                                     )}
                                   </div>
+                                </div>
+                                <div className="ml-5">
+                                  <TaskLinkCard notes={t.notes} link={t.link} />
                                 </div>
                                 {t.notes && expandedTaskNotes[t.id] && (
                                   <div className="mt-1.5 ml-5 p-2 rounded-md bg-amber-50/80 dark:bg-amber-950/40 border border-amber-200/70 dark:border-amber-800/50 text-xs text-amber-950 dark:text-amber-200 whitespace-pre-wrap leading-relaxed">

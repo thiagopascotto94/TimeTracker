@@ -24,6 +24,14 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
     headers.set('x-workspace-id', activeWorkspaceId);
   }
 
+  const userTimezone =
+    typeof window !== 'undefined'
+      ? localStorage.getItem('cronos_user_timezone') || Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Sao_Paulo'
+      : 'America/Sao_Paulo';
+  if (userTimezone && url.startsWith('/api/') && !headers.has('x-timezone')) {
+    headers.set('x-timezone', userTimezone);
+  }
+
   const fetchFn = typeof window !== 'undefined' ? window.fetch.bind(window) : fetch;
   const res = await fetchFn(input, {
     ...init,

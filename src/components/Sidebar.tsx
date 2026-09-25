@@ -18,6 +18,7 @@ import {
   User as UserIcon,
   Search,
   Keyboard,
+  Target,
 } from 'lucide-react';
 import { User, Tenant, TimeSession } from '../types';
 import { Button } from './ui/button';
@@ -26,8 +27,8 @@ import { WorkspaceSelector } from './WorkspaceSelector';
 export type SidebarMode = 'full' | 'icons';
 
 interface SidebarProps {
-  activeTab: 'timer' | 'reports' | 'history' | 'clients' | 'notes' | 'settings' | 'assistant' | 'linked-clients';
-  setActiveTab: (tab: 'timer' | 'reports' | 'history' | 'clients' | 'notes' | 'settings' | 'assistant' | 'linked-clients') => void;
+  activeTab: 'timer' | 'reports' | 'history' | 'clients' | 'notes' | 'settings' | 'assistant' | 'linked-clients' | 'team-progress';
+  setActiveTab: (tab: 'timer' | 'reports' | 'history' | 'clients' | 'notes' | 'settings' | 'assistant' | 'linked-clients' | 'team-progress') => void;
   user: User | null;
   tenant: Tenant | null;
   activeSession: TimeSession | null;
@@ -73,7 +74,7 @@ export function Sidebar({
   };
 
   interface NavItem {
-    id: 'timer' | 'reports' | 'history' | 'clients' | 'notes' | 'assistant' | 'linked-clients' | 'settings';
+    id: 'timer' | 'reports' | 'history' | 'clients' | 'notes' | 'assistant' | 'linked-clients' | 'settings' | 'team-progress';
     label: string;
     icon: any;
     badge?: boolean;
@@ -84,9 +85,10 @@ export function Sidebar({
   const navItems: NavItem[] = [
     { id: 'timer', label: 'Cronômetro', icon: Clock, badge: activeSession ? true : false },
     { id: 'reports', label: 'Relatórios', icon: BarChart3 },
+    { id: 'team-progress', label: 'Progresso Equipe', icon: Target, highlight: true },
     { id: 'history', label: 'Histórico', icon: History },
     { id: 'clients', label: 'Clientes', icon: Briefcase },
-    { id: 'notes', label: 'Notas & TODO', icon: FileText, highlight: true },
+    { id: 'notes', label: 'Notas & TODO', icon: FileText },
     { id: 'assistant', label: 'Cronos AI', icon: Sparkles, ai: true },
     { id: 'linked-clients', label: 'Vínculos & Equipe', icon: Users },
     { id: 'settings', label: 'Configurações', icon: Settings },

@@ -70,11 +70,13 @@ authRouter.post('/login', async (req, res) => {
         email: user.email,
         role: user.role || 'admin',
         default_hourly_rate: user.default_hourly_rate,
+        timezone: user.timezone || tenant?.timezone || 'America/Sao_Paulo',
       },
       tenant: tenant ? {
         id: tenant.id,
         name: tenant.name,
         plan_id: tenant.plan_id || 'free',
+        timezone: tenant.timezone || 'America/Sao_Paulo',
       } : null,
       has_linked_clients: linkedClients.length > 0,
       linked_clients_count: linkedClients.length,
@@ -421,11 +423,13 @@ authRouter.get('/me', authMiddleware, async (req: AuthenticatedRequest, res: Res
         role: user.role,
         can_view_billing: req.canViewBilling ?? (user.can_view_billing !== false),
         default_hourly_rate: user.default_hourly_rate,
+        timezone: user.timezone || tenant.timezone || 'America/Sao_Paulo',
       },
       tenant: {
         id: tenant.id,
         name: tenant.name,
         plan_id: tenant.plan_id || 'free',
+        timezone: tenant.timezone || 'America/Sao_Paulo',
         default_target_minutes: tenant.default_target_minutes,
         default_client_daily_target_minutes: tenant.default_client_daily_target_minutes,
         git_provider: tenant.git_provider || 'github',
@@ -435,6 +439,7 @@ authRouter.get('/me', authMiddleware, async (req: AuthenticatedRequest, res: Res
         gitlab_project: tenant.gitlab_project,
         gitlab_token: tenant.gitlab_token,
         allowed_repositories: tenant.allowed_repositories,
+        max_retroactive_minutes: tenant.max_retroactive_minutes !== undefined && tenant.max_retroactive_minutes !== null ? Number(tenant.max_retroactive_minutes) : 120,
       },
     });
   } catch (err: any) {
@@ -452,6 +457,7 @@ authRouter.put('/profile', authMiddleware, async (req: AuthenticatedRequest, res
       tenant_name,
       default_target_minutes,
       default_client_daily_target_minutes,
+      max_retroactive_minutes,
       git_provider,
       github_repo,
       github_token,
@@ -459,16 +465,28 @@ authRouter.put('/profile', authMiddleware, async (req: AuthenticatedRequest, res
       gitlab_project,
       gitlab_token,
       allowed_repositories,
+      timezone,
     } = req.body;
 
     if (name) user.name = name;
     if (default_hourly_rate !== undefined) {
       user.default_hourly_rate = Number(default_hourly_rate);
     }
+    if (timezone !== undefined) {
+      user.timezone = typeof timezone === 'string' && timezone.trim() ? timezone.trim() : 'America/Sao_Paulo';
+    }
     await user.save();
 
     if (req.tenant) {
       if (tenant_name !== undefined) req.tenant.name = tenant_name;
+      if (timezone !== undefined) {
+        req.tenant.timezone = typeof timezone === 'string' && timezone.trim() ? timezone.trim() : 'America/Sao_Paulo';
+      }
+      if (max_retroactive_minutes !== undefined) {
+        req.tenant.max_retroactive_minutes = max_retroactive_minutes !== null && max_retroactive_minutes !== ''
+          ? Math.max(0, Number(max_retroactive_minutes))
+          : 120;
+      }
       if (default_target_minutes !== undefined) {
         req.tenant.default_target_minutes = default_target_minutes !== null && default_target_minutes !== ''
           ? Number(default_target_minutes)
@@ -503,6 +521,16 @@ authRouter.put('/profile', authMiddleware, async (req: AuthenticatedRequest, res
           : JSON.stringify(allowed_repositories || []);
       }
       await req.tenant.save();
+
+      // If active workspace exists, sync max_retroactive_minutes
+      if (req.workspaceId && max_retroactive_minutes !== undefined) {
+        const { Workspace } = await import('../db');
+        const activeWs = await Workspace.findByPk(req.workspaceId);
+        if (activeWs) {
+          activeWs.max_retroactive_minutes = req.tenant.max_retroactive_minutes;
+          await activeWs.save();
+        }
+      }
     }
 
     return res.json({
@@ -512,12 +540,15 @@ authRouter.put('/profile', authMiddleware, async (req: AuthenticatedRequest, res
         name: user.name,
         email: user.email,
         default_hourly_rate: user.default_hourly_rate,
+        timezone: user.timezone || req.tenant?.timezone || 'America/Sao_Paulo',
       },
       tenant: req.tenant ? {
         id: req.tenant.id,
         name: req.tenant.name,
+        timezone: req.tenant.timezone || 'America/Sao_Paulo',
         default_target_minutes: req.tenant.default_target_minutes,
         default_client_daily_target_minutes: req.tenant.default_client_daily_target_minutes,
+        max_retroactive_minutes: req.tenant.max_retroactive_minutes !== undefined && req.tenant.max_retroactive_minutes !== null ? Number(req.tenant.max_retroactive_minutes) : 120,
         git_provider: req.tenant.git_provider || 'github',
         github_repo: req.tenant.github_repo,
         github_token: req.tenant.github_token,

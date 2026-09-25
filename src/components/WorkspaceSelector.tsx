@@ -34,6 +34,7 @@ export function WorkspaceSelector({ onWorkspaceChange }: WorkspaceSelectorProps)
   const [selectedLockedWorkspace, setSelectedLockedWorkspace] = useState<WorkspaceItem | null>(null);
   const [newWorkspaceName, setNewWorkspaceName] = useState('');
   const [newWorkspaceDesc, setNewWorkspaceDesc] = useState('');
+  const [newWorkspaceMaxRetroactive, setNewWorkspaceMaxRetroactive] = useState('120');
   const [creating, setCreating] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -148,6 +149,7 @@ export function WorkspaceSelector({ onWorkspaceChange }: WorkspaceSelectorProps)
         body: JSON.stringify({
           name: newWorkspaceName.trim(),
           description: newWorkspaceDesc.trim() || undefined,
+          max_retroactive_minutes: newWorkspaceMaxRetroactive.trim() !== '' ? Math.max(0, parseInt(newWorkspaceMaxRetroactive, 10)) : 120,
         }),
       });
 
@@ -166,6 +168,7 @@ export function WorkspaceSelector({ onWorkspaceChange }: WorkspaceSelectorProps)
       setShowCreateModal(false);
       setNewWorkspaceName('');
       setNewWorkspaceDesc('');
+      setNewWorkspaceMaxRetroactive('120');
       await fetchWorkspaces();
       window.dispatchEvent(new CustomEvent('workspace-changed', { detail: { workspaceId: data.workspace.id } }));
       if (onWorkspaceChange) {
@@ -417,6 +420,31 @@ export function WorkspaceSelector({ onWorkspaceChange }: WorkspaceSelectorProps)
                   placeholder="Breve descrição do espaço de trabalho..."
                   className="text-xs"
                 />
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                    Limite Máximo de Tempo Retroativo (Minutos)
+                  </label>
+                  <span className="text-2xs font-medium text-neutral-500 dark:text-neutral-400">
+                    {newWorkspaceMaxRetroactive === '0'
+                      ? 'Desativado'
+                      : `${newWorkspaceMaxRetroactive} min (${(parseInt(newWorkspaceMaxRetroactive || '0', 10) / 60).toFixed(1)}h)`}
+                  </span>
+                </div>
+                <Input
+                  type="number"
+                  min="0"
+                  max="10080"
+                  value={newWorkspaceMaxRetroactive}
+                  onChange={(e) => setNewWorkspaceMaxRetroactive(e.target.value)}
+                  placeholder="120"
+                  className="text-xs"
+                />
+                <p className="text-3xs text-neutral-500 dark:text-neutral-400">
+                  Tempo máximo que usuários deste workspace poderão retroagir ao iniciar um timer (0 = desativado, padrão = 120m).
+                </p>
               </div>
 
               <div className="flex items-center justify-end gap-2 pt-2">

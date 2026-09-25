@@ -19,6 +19,7 @@ import { AiAssistantView } from './components/AiAssistantView';
 import { SessionEditView } from './components/SessionEditView';
 import { LinkedClientsView } from './components/LinkedClientsView';
 import { NotesView } from './components/NotesView';
+import { TeamProgressView } from './components/TeamProgressView';
 import { CommandPaletteModal } from './components/CommandPaletteModal';
 import { ShortcutsHelpModal } from './components/ShortcutsHelpModal';
 import { useDynamicDocumentTitle } from './hooks/useDynamicDocumentTitle';
@@ -26,8 +27,8 @@ import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { formatCurrency, formatDurationHuman } from './utils/format';
 import { apiFetch } from './utils/api';
 
-export type TabType = 'timer' | 'reports' | 'history' | 'clients' | 'client-new' | 'client-edit' | 'client-contacts' | 'session-edit' | 'notes' | 'settings' | 'assistant' | 'linked-clients';
-const VALID_TABS: readonly TabType[] = ['timer', 'reports', 'history', 'clients', 'client-new', 'client-edit', 'client-contacts', 'session-edit', 'notes', 'settings', 'assistant', 'linked-clients'] as const;
+export type TabType = 'timer' | 'reports' | 'history' | 'clients' | 'client-new' | 'client-edit' | 'client-contacts' | 'session-edit' | 'notes' | 'settings' | 'assistant' | 'linked-clients' | 'team-progress';
+const VALID_TABS: readonly TabType[] = ['timer', 'reports', 'history', 'clients', 'client-new', 'client-edit', 'client-contacts', 'session-edit', 'notes', 'settings', 'assistant', 'linked-clients', 'team-progress'] as const;
 
 function getTabFromUrl(): { tab: TabType; clientId?: string; sessionId?: string; reportsSubTab?: 'overview' | 'shared-links' } {
   if (typeof window === 'undefined') return { tab: 'timer' };
@@ -323,6 +324,10 @@ function AppContent() {
         const data = await res.json();
         setUser(data.user);
         setTenant(data.tenant);
+        const effectiveTz = data.user?.timezone || data.tenant?.timezone;
+        if (effectiveTz && typeof window !== 'undefined') {
+          localStorage.setItem('cronos_user_timezone', effectiveTz);
+        }
       }
     } catch (err) {
       console.error('Error fetching user:', err);
@@ -440,6 +445,9 @@ function AppContent() {
     target_minutes: number | null;
     previous_session_id: string | null;
     client_id: string | null;
+    start_time?: string | null;
+    retroactive_minutes?: number | null;
+    retroactive_reason?: string | null;
   }) => {
     try {
       setLoading(true);
@@ -456,11 +464,19 @@ function AppContent() {
 
       const resData = await res.json();
       setActiveSession(resData.session);
-      addToast({
-        title: 'Cronômetro Iniciado',
-        description: `Sessão "${resData.session.title}" em andamento com horário oficial do servidor.`,
-        variant: 'success',
-      });
+      if (resData.session?.is_retroactive) {
+        addToast({
+          title: 'Cronômetro Retroativo Iniciado',
+          description: `Sessão "${resData.session.title}" iniciada há ${resData.session.retroactive_minutes} min (Motivo: "${resData.session.retroactive_reason}").`,
+          variant: 'success',
+        });
+      } else {
+        addToast({
+          title: 'Cronômetro Iniciado',
+          description: `Sessão "${resData.session.title}" em andamento com horário oficial do servidor.`,
+          variant: 'success',
+        });
+      }
       await fetchSessions();
     } catch (err: any) {
       addToast({
@@ -826,6 +842,7 @@ function AppContent() {
     tenant_name: string;
     default_target_minutes?: number | null;
     default_client_daily_target_minutes?: number | null;
+    max_retroactive_minutes?: number | null;
     git_provider?: 'github' | 'gitlab' | null;
     github_repo?: string | null;
     github_token?: string | null;
@@ -833,6 +850,7 @@ function AppContent() {
     gitlab_project?: string | null;
     gitlab_token?: string | null;
     allowed_repositories?: string | null | GitRepositoryItem[];
+    timezone?: string;
   }) => {
     try {
       setLoading(true);
@@ -850,6 +868,12 @@ function AppContent() {
       const resData = await res.json();
       setUser(resData.user);
       if (resData.tenant) setTenant(resData.tenant);
+
+      const effectiveTz = resData.user?.timezone || data.timezone;
+      if (effectiveTz && typeof window !== 'undefined') {
+        localStorage.setItem('cronos_user_timezone', effectiveTz);
+        window.dispatchEvent(new CustomEvent('timezone-changed', { detail: { timezone: effectiveTz } }));
+      }
 
       addToast({
         title: 'Configurações Salvas!',
@@ -1012,6 +1036,14 @@ function AppContent() {
                   window.history.pushState(null, '', `/shared/${token}`);
                 }}
                 initialSubTab={reportsSubTab}
+                currentUser={user}
+              />
+            )}
+
+            {activeTab === 'team-progress' && (
+              <TeamProgressView
+                currentUser={user}
+                setActiveTab={setActiveTab}
               />
             )}
 

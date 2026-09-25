@@ -33,6 +33,9 @@ import {
   FileJson,
   Database,
   Lock,
+  Compass,
+  Sparkles,
+  History,
 } from 'lucide-react';
 import { User, Tenant, Client, GitRepositoryItem, LinkedClientItem } from '../types';
 import { formatCurrency } from '../utils/format';
@@ -63,6 +66,7 @@ interface SettingsViewProps {
     tenant_name: string;
     default_target_minutes?: number | null;
     default_client_daily_target_minutes?: number | null;
+    max_retroactive_minutes?: number | null;
     git_provider?: 'github' | 'gitlab' | null;
     github_repo?: string | null;
     github_token?: string | null;
@@ -70,10 +74,58 @@ interface SettingsViewProps {
     gitlab_project?: string | null;
     gitlab_token?: string | null;
     allowed_repositories?: string | null | GitRepositoryItem[];
+    timezone?: string;
   }) => Promise<void>;
   loading: boolean;
   initialTab?: 'profile' | 'workspace' | 'git' | 'notifications' | 'billing' | 'team' | 'linked-clients';
 }
+
+const TIMEZONE_GROUPS = [
+  {
+    group: 'Brasil (Fusos Oficiais)',
+    options: [
+      { value: 'America/Sao_Paulo', label: 'Brasília / São Paulo / Rio / Sul (UTC-3 - Horário de Brasília)' },
+      { value: 'America/Fortaleza', label: 'Nordeste: Fortaleza / Salvador / Recife / Natal (UTC-3)' },
+      { value: 'America/Belem', label: 'Norte: Belém / Amapá (UTC-3)' },
+      { value: 'America/Manaus', label: 'Amazonas: Manaus / Boa Vista (UTC-4)' },
+      { value: 'America/Cuiaba', label: 'Centro-Oeste: Cuiabá / Campo Grande (UTC-4)' },
+      { value: 'America/Porto_Velho', label: 'Rondônia: Porto Velho (UTC-4)' },
+      { value: 'America/Rio_Branco', label: 'Acre: Rio Branco (UTC-5)' },
+      { value: 'America/Noronha', label: 'Fernando de Noronha (UTC-2)' },
+    ],
+  },
+  {
+    group: 'América do Sul & Latina',
+    options: [
+      { value: 'America/Buenos_Aires', label: 'Argentina: Buenos Aires (UTC-3)' },
+      { value: 'America/Montevideo', label: 'Uruguai: Montevidéu (UTC-3)' },
+      { value: 'America/Santiago', label: 'Chile: Santiago (UTC-4/-3)' },
+      { value: 'America/Bogota', label: 'Colômbia: Bogotá (UTC-5)' },
+      { value: 'America/Lima', label: 'Peru: Lima (UTC-5)' },
+      { value: 'America/Mexico_City', label: 'México: Cidade do México (UTC-6)' },
+    ],
+  },
+  {
+    group: 'América do Norte',
+    options: [
+      { value: 'America/New_York', label: 'EUA: Nova York / Miami (UTC-5 / EDT)' },
+      { value: 'America/Chicago', label: 'EUA: Chicago / Central (UTC-6 / CDT)' },
+      { value: 'America/Denver', label: 'EUA: Denver / Mountain (UTC-7 / MDT)' },
+      { value: 'America/Los_Angeles', label: 'EUA: Los Angeles / San Francisco (UTC-8 / PDT)' },
+    ],
+  },
+  {
+    group: 'Europa & Outros',
+    options: [
+      { value: 'Europe/Lisbon', label: 'Portugal: Lisboa / Porto (WET/WEST)' },
+      { value: 'Europe/Madrid', label: 'Espanha: Madrid / Barcelona (CET/CEST)' },
+      { value: 'Europe/London', label: 'Reino Unido: Londres (GMT/BST)' },
+      { value: 'Europe/Paris', label: 'França: Paris (CET/CEST)' },
+      { value: 'Europe/Berlin', label: 'Alemanha: Berlim (CET/CEST)' },
+      { value: 'UTC', label: 'UTC (Tempo Universal Coordenado - UTC+0)' },
+    ],
+  },
+];
 
 export function SettingsView({
   user,
@@ -96,11 +148,20 @@ export function SettingsView({
     user?.default_hourly_rate ? user.default_hourly_rate.toString() : '150'
   );
   const [tenantName, setTenantName] = useState(tenant?.name || '');
+  const [timezone, setTimezone] = useState(
+    user?.timezone || tenant?.timezone || 'America/Sao_Paulo'
+  );
+  const [currentTimeInZone, setCurrentTimeInZone] = useState('');
   const [defaultTargetMinutes, setDefaultTargetMinutes] = useState(
     tenant?.default_target_minutes ? tenant.default_target_minutes.toString() : '60'
   );
   const [defaultClientDailyTargetMinutes, setDefaultClientDailyTargetMinutes] = useState(
     tenant?.default_client_daily_target_minutes ? tenant.default_client_daily_target_minutes.toString() : '120'
+  );
+  const [maxRetroactiveMinutes, setMaxRetroactiveMinutes] = useState(
+    tenant?.max_retroactive_minutes !== undefined && tenant?.max_retroactive_minutes !== null
+      ? tenant.max_retroactive_minutes.toString()
+      : '120'
   );
 
   // Git Provider & Integration state
@@ -167,8 +228,7 @@ export function SettingsView({
   const handleExportWorkspace = async () => {
     try {
       setExportingWorkspace(true);
-      const wsId = tenant?.id || user?.tenant_id;
-      const res = await apiFetch(`/api/workspaces/${wsId}/export`);
+      const res = await apiFetch('/api/workspaces/export');
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || 'Erro ao exportar dados do workspace');
@@ -252,17 +312,65 @@ export function SettingsView({
   };
 
   useEffect(() => {
+    const updateTime = () => {
+      try {
+        const now = new Date();
+        const formatter = new Intl.DateTimeFormat('pt-BR', {
+          timeZone: timezone || 'America/Sao_Paulo',
+          dateStyle: 'full',
+          timeStyle: 'medium',
+        });
+        setCurrentTimeInZone(formatter.format(now));
+      } catch (e) {
+        setCurrentTimeInZone('');
+      }
+    };
+    updateTime();
+    const interval = setInterval(updateTime, 1000);
+    return () => clearInterval(interval);
+  }, [timezone]);
+
+  const handleAutoDetectTimezone = () => {
+    try {
+      const detected = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (detected) {
+        setTimezone(detected);
+        addToast({
+          title: 'Fuso Horário Detectado!',
+          description: `Definido para "${detected}" com base no seu navegador.`,
+          variant: 'success',
+        });
+      }
+    } catch (e) {
+      addToast({
+        title: 'Não foi possível detectar',
+        description: 'Selecione seu fuso horário manualmente na lista.',
+        variant: 'destructive',
+      });
+    }
+  };
+
+  useEffect(() => {
     if (user) {
       setName(user.name);
       setHourlyRate(user.default_hourly_rate.toString());
+      if (user.timezone) {
+        setTimezone(user.timezone);
+      }
     }
     if (tenant) {
       setTenantName(tenant.name);
+      if (!user?.timezone && tenant.timezone) {
+        setTimezone(tenant.timezone);
+      }
       if (tenant.default_target_minutes !== undefined && tenant.default_target_minutes !== null) {
         setDefaultTargetMinutes(tenant.default_target_minutes.toString());
       }
       if (tenant.default_client_daily_target_minutes !== undefined && tenant.default_client_daily_target_minutes !== null) {
         setDefaultClientDailyTargetMinutes(tenant.default_client_daily_target_minutes.toString());
+      }
+      if (tenant.max_retroactive_minutes !== undefined && tenant.max_retroactive_minutes !== null) {
+        setMaxRetroactiveMinutes(tenant.max_retroactive_minutes.toString());
       }
       if (tenant.git_provider) {
         setGitProvider(tenant.git_provider);
@@ -430,6 +538,7 @@ export function SettingsView({
     const clientDailyMinNum = defaultClientDailyTargetMinutes.trim()
       ? parseInt(defaultClientDailyTargetMinutes, 10)
       : null;
+    const maxRetroNum = maxRetroactiveMinutes.trim() !== '' ? Math.max(0, parseInt(maxRetroactiveMinutes, 10)) : 120;
 
     await onUpdateProfile({
       name: name.trim(),
@@ -437,6 +546,7 @@ export function SettingsView({
       tenant_name: tenantName.trim(),
       default_target_minutes: targetMinNum,
       default_client_daily_target_minutes: clientDailyMinNum,
+      max_retroactive_minutes: maxRetroNum,
       git_provider: gitProvider,
       github_repo: githubRepo.trim() || null,
       github_token: githubToken.trim() || null,
@@ -444,6 +554,7 @@ export function SettingsView({
       gitlab_project: gitlabProject.trim() || null,
       gitlab_token: gitlabToken.trim() || null,
       allowed_repositories: JSON.stringify(allowedRepositories),
+      timezone: timezone.trim() || 'America/Sao_Paulo',
     });
   };
 
@@ -657,6 +768,84 @@ export function SettingsView({
                     </div>
                   </CardContent>
                 </Card>
+
+                {/* Card 3: Fuso Horário & Cronos AI */}
+                <Card className="border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shadow-2xs">
+                  <CardHeader>
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                      <div>
+                        <CardTitle className="text-base font-bold text-neutral-900 dark:text-neutral-100 flex items-center gap-2">
+                          <Globe className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+                          <span>Fuso Horário do Usuário &amp; Cronos AI</span>
+                        </CardTitle>
+                        <CardDescription className="text-xs text-neutral-500 dark:text-neutral-400 mt-1">
+                          Define a zona temporal utilizada para registrar sessões, relatórios e orientar o Cronos AI para não responder em UTC.
+                        </CardDescription>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={handleAutoDetectTimezone}
+                        className="gap-1.5 text-xs h-8 border-indigo-200 dark:border-indigo-800/60 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 self-start sm:self-auto cursor-pointer"
+                        title="Detectar fuso horário configurado no navegador"
+                      >
+                        <Compass className="w-3.5 h-3.5" />
+                        <span>Detectar do Navegador</span>
+                      </Button>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-semibold text-neutral-700 dark:text-neutral-300 flex items-center gap-1.5">
+                        <Clock className="w-3.5 h-3.5 text-neutral-500" />
+                        <span>Selecione o seu Fuso Horário (IANA)</span>
+                      </label>
+                      <select
+                        value={timezone}
+                        onChange={(e) => setTimezone(e.target.value)}
+                        className="w-full text-xs md:text-sm rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-850 px-3 py-2 text-neutral-900 dark:text-neutral-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
+                      >
+                        {TIMEZONE_GROUPS.map((group) => (
+                          <optgroup key={group.group} label={group.group}>
+                            {group.options.map((opt) => (
+                              <option key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </option>
+                            ))}
+                          </optgroup>
+                        ))}
+                        {!TIMEZONE_GROUPS.some((g) => g.options.some((o) => o.value === timezone)) && (
+                          <optgroup label="Outro / Personalizado">
+                            <option value={timezone}>{timezone}</option>
+                          </optgroup>
+                        )}
+                      </select>
+                    </div>
+
+                    {/* Live Clock & Cronos AI Status Banner */}
+                    <div className="rounded-lg border border-indigo-100 dark:border-indigo-900/60 bg-indigo-50/50 dark:bg-indigo-950/30 p-3.5 space-y-2">
+                      <div className="flex items-center justify-between flex-wrap gap-2">
+                        <div className="flex items-center gap-2 text-xs font-semibold text-indigo-950 dark:text-indigo-200">
+                          <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                          <span>Relógio Local Ativo:</span>
+                          <span className="font-mono text-indigo-700 dark:text-indigo-300 font-bold bg-white dark:bg-neutral-800 px-2 py-0.5 rounded border border-indigo-200 dark:border-indigo-800">
+                            {currentTimeInZone || 'Calculando...'}
+                          </span>
+                        </div>
+                        <Badge variant="secondary" className="text-2xs font-mono">
+                          {timezone}
+                        </Badge>
+                      </div>
+                      <p className="text-2xs text-neutral-600 dark:text-neutral-400 flex items-start gap-1.5">
+                        <Sparkles className="w-3.5 h-3.5 text-amber-500 shrink-0 mt-0.5" />
+                        <span>
+                          <strong>Cronos AI Sincronizado:</strong> Quando você perguntar "quanto trabalhei hoje?", "que horas iniciei?", ou pedir relatórios e projeções, o Cronos AI interpretará os horários estritamente no fuso <code>{timezone}</code> e nunca responderá em UTC puro.
+                        </span>
+                      </p>
+                    </div>
+                  </CardContent>
+                </Card>
               </div>
             )}
 
@@ -818,6 +1007,80 @@ export function SettingsView({
                           placeholder="Ex: 120"
                           className="w-28 text-xs font-medium h-8"
                         />
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Card: Limite de Início Retroativo do Cronômetro */}
+                <Card className="border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 shadow-2xs">
+                  <CardHeader>
+                    <CardTitle className="text-base font-bold text-neutral-900 dark:text-neutral-100 flex items-center gap-2">
+                      <History className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+                      <span>Limite de Início Retroativo do Cronômetro</span>
+                    </CardTitle>
+                    <CardDescription className="text-xs text-neutral-500 dark:text-neutral-400">
+                      Configure o tempo máximo anterior/para trás que o usuário ou membro pode escolher ao iniciar um cronômetro retroativo. O preenchimento do motivo pelo usuário é obrigatório.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="space-y-2 p-3.5 rounded-lg border border-neutral-200 dark:border-neutral-800 bg-neutral-50/70 dark:bg-neutral-850/70">
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-semibold text-neutral-800 dark:text-neutral-200 flex items-center gap-1.5">
+                          <Clock className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                          <span>Máximo de Tempo Retroativo Permitido</span>
+                        </label>
+                        <span className="text-xs font-semibold text-neutral-600 dark:text-neutral-400">
+                          {maxRetroactiveMinutes === '0'
+                            ? 'Desativado (0 min)'
+                            : maxRetroactiveMinutes && parseInt(maxRetroactiveMinutes, 10) > 0
+                            ? `${maxRetroactiveMinutes} min (${(parseInt(maxRetroactiveMinutes, 10) / 60).toFixed(1)}h)`
+                            : 'Padrão (120 min / 2h)'}
+                        </span>
+                      </div>
+                      <p className="text-2xs text-neutral-500 dark:text-neutral-400">
+                        O dono do workspace define aqui o limite para trás que qualquer membro pode retroagir ao iniciar o timer (ex: quando esqueceu de acionar o cronômetro).
+                      </p>
+
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        {[
+                          { label: 'Desativado (0m)', val: '0' },
+                          { label: '30 min', val: '30' },
+                          { label: '1 hora (60m)', val: '60' },
+                          { label: '2 horas (120m)', val: '120' },
+                          { label: '4 horas (240m)', val: '240' },
+                          { label: '8 horas (480m)', val: '480' },
+                          { label: '24 horas (1440m)', val: '1440' },
+                        ].map((chip) => (
+                          <button
+                            key={chip.label}
+                            type="button"
+                            onClick={() => setMaxRetroactiveMinutes(chip.val)}
+                            className={`px-3 py-1.5 text-xs font-medium rounded-md border transition-colors cursor-pointer ${
+                              maxRetroactiveMinutes === chip.val
+                                ? 'border-indigo-600 bg-indigo-600 text-white dark:border-indigo-500 dark:bg-indigo-500'
+                                : 'border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800'
+                            }`}
+                          >
+                            {chip.label}
+                          </button>
+                        ))}
+                      </div>
+
+                      <div className="flex items-center gap-2 pt-1">
+                        <span className="text-xs text-neutral-600 dark:text-neutral-400">Ou digite em minutos máximos:</span>
+                        <Input
+                          type="number"
+                          min="0"
+                          max="10080"
+                          value={maxRetroactiveMinutes}
+                          onChange={(e) => setMaxRetroactiveMinutes(e.target.value)}
+                          placeholder="Ex: 120"
+                          className="w-28 text-xs font-medium h-8"
+                        />
+                        <span className="text-2xs text-neutral-500 dark:text-neutral-400">
+                          (0 = desativado, 120 = 2 horas, 1440 = 24 horas)
+                        </span>
                       </div>
                     </div>
                   </CardContent>

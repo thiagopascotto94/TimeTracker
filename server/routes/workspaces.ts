@@ -1,4 +1,5 @@
 import { Router, Response } from 'express';
+import { Op } from 'sequelize';
 import { Workspace, WorkspaceMember, User, Subscription, Plan, Tenant, Client, ClientContact, TimeSession, Task, SharedReport, Invoice } from '../db';
 import { authMiddleware, requireRole, AuthenticatedRequest } from '../auth';
 import { getTenantWorkspaceLockInfo, isWorkspaceLocked } from '../workspace-limits';
@@ -128,6 +129,8 @@ workspacesRouter.get('/', async (req: AuthenticatedRequest, res: Response) => {
         created_at: ws.created_at,
         updated_at: ws.updated_at,
         order_index: index,
+        timezone: ws.timezone || 'America/Sao_Paulo',
+        max_retroactive_minutes: ws.max_retroactive_minutes !== undefined && ws.max_retroactive_minutes !== null ? Number(ws.max_retroactive_minutes) : 120,
         is_locked: isLocked,
         lock_reason: lockReason,
         is_active: ws.id === effectiveActiveId,
@@ -168,7 +171,7 @@ workspacesRouter.get('/', async (req: AuthenticatedRequest, res: Response) => {
 // POST /api/workspaces - Create new workspace
 workspacesRouter.post('/', async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { name, description } = req.body;
+    const { name, description, timezone, max_retroactive_minutes } = req.body;
     const tenantId = req.tenantId!;
     const userId = req.userId!;
 
@@ -195,6 +198,8 @@ workspacesRouter.post('/', async (req: AuthenticatedRequest, res: Response) => {
       tenant_id: tenantId,
       name: name.trim(),
       description: description ? description.trim() : null,
+      timezone: timezone ? timezone.trim() : 'America/Sao_Paulo',
+      max_retroactive_minutes: max_retroactive_minutes !== undefined && max_retroactive_minutes !== null ? Math.max(0, Number(max_retroactive_minutes)) : 120,
     });
 
     await WorkspaceMember.create({
@@ -212,6 +217,7 @@ workspacesRouter.post('/', async (req: AuthenticatedRequest, res: Response) => {
         description: workspace.description,
         role: 'owner',
         members_count: 1,
+        timezone: workspace.timezone || 'America/Sao_Paulo',
         created_at: workspace.created_at,
       },
     });
@@ -268,6 +274,8 @@ workspacesRouter.get('/:id', async (req: AuthenticatedRequest, res: Response) =>
         default_target_minutes: workspace.default_target_minutes ?? 60,
         default_client_daily_target_minutes: workspace.default_client_daily_target_minutes ?? 120,
         monthly_billing_goal: workspace.monthly_billing_goal ?? 10000.0,
+        timezone: workspace.timezone || 'America/Sao_Paulo',
+        max_retroactive_minutes: workspace.max_retroactive_minutes !== undefined && workspace.max_retroactive_minutes !== null ? Number(workspace.max_retroactive_minutes) : 120,
         role: membership.role,
         members: workspace.Members?.map((m) => ({
           id: m.id,
@@ -314,6 +322,8 @@ workspacesRouter.put('/:id', requireRole('owner', 'admin'), async (req: Authenti
       gitlab_project,
       gitlab_token,
       allowed_repositories,
+      timezone,
+      max_retroactive_minutes,
     } = req.body;
 
     const workspace = await Workspace.findByPk(id);
@@ -326,6 +336,12 @@ workspacesRouter.put('/:id', requireRole('owner', 'admin'), async (req: Authenti
     }
     if (description !== undefined) {
       workspace.description = description ? description.trim() : null;
+    }
+    if (timezone !== undefined) {
+      workspace.timezone = typeof timezone === 'string' && timezone.trim() ? timezone.trim() : 'America/Sao_Paulo';
+    }
+    if (max_retroactive_minutes !== undefined) {
+      workspace.max_retroactive_minutes = max_retroactive_minutes !== null && max_retroactive_minutes !== '' ? Math.max(0, Number(max_retroactive_minutes)) : 120;
     }
     if (default_target_minutes !== undefined) {
       workspace.default_target_minutes = default_target_minutes !== null && default_target_minutes !== '' ? Number(default_target_minutes) : null;
@@ -377,6 +393,8 @@ workspacesRouter.put('/:id', requireRole('owner', 'admin'), async (req: Authenti
         default_target_minutes: workspace.default_target_minutes,
         default_client_daily_target_minutes: workspace.default_client_daily_target_minutes,
         monthly_billing_goal: workspace.monthly_billing_goal,
+        timezone: workspace.timezone || 'America/Sao_Paulo',
+        max_retroactive_minutes: workspace.max_retroactive_minutes !== undefined && workspace.max_retroactive_minutes !== null ? Number(workspace.max_retroactive_minutes) : 120,
       },
       message: 'Workspace atualizado com sucesso',
     });
@@ -576,11 +594,11 @@ workspacesRouter.delete('/:id/members/:targetUserId', requireRole('owner', 'admi
   }
 });
 
-// PATCH /api/workspaces/:id/members/:targetUserId - Update member settings (can_view_billing / role)
+// PATCH /api/workspaces/:id/members/:targetUserId - Update member settings (can_view_billing / role / weekly target)
 workspacesRouter.patch('/:id/members/:targetUserId', requireRole('owner', 'admin'), async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { id, targetUserId } = req.params;
-    const { role, can_view_billing } = req.body;
+    const { role, can_view_billing, weekly_target_hours } = req.body;
 
     const lockCheck = await isWorkspaceLocked(id, req.tenantId!);
     if (lockCheck.isLocked) {
@@ -624,6 +642,10 @@ workspacesRouter.patch('/:id/members/:targetUserId', requireRole('owner', 'admin
       );
     }
 
+    if (weekly_target_hours !== undefined) {
+      targetMembership.weekly_target_hours = weekly_target_hours === null || weekly_target_hours === '' ? null : Number(weekly_target_hours);
+    }
+
     await targetMembership.save();
 
     return res.json({
@@ -633,12 +655,148 @@ workspacesRouter.patch('/:id/members/:targetUserId', requireRole('owner', 'admin
         user_id: targetMembership.user_id,
         role: targetMembership.role,
         can_view_billing: targetMembership.can_view_billing,
+        weekly_target_hours: targetMembership.weekly_target_hours,
       },
-      message: 'Permissões do membro atualizadas com sucesso',
+      message: 'Configurações do membro atualizadas com sucesso',
     });
   } catch (error) {
     console.error('Error updating member:', error);
-    res.status(500).json({ error: 'Erro ao atualizar permissões do membro' });
+    res.status(500).json({ error: 'Erro ao atualizar configurações do membro' });
+  }
+});
+
+// GET /api/workspaces/current/team-goals-progress - Redirect to active workspace team goals progress
+workspacesRouter.get('/current/team-goals-progress', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const wsId = req.workspaceId;
+    if (wsId) {
+      return res.redirect(`/api/workspaces/${wsId}/team-goals-progress`);
+    }
+    const tenantId = req.tenantId!;
+    const firstWs = await Workspace.findOne({
+      where: { tenant_id: tenantId },
+      order: [['created_at', 'ASC']],
+    });
+    if (!firstWs) {
+      return res.status(404).json({ error: 'Nenhum workspace encontrado' });
+    }
+    return res.redirect(`/api/workspaces/${firstWs.id}/team-goals-progress`);
+  } catch (error) {
+    console.error('Error redirecting to team goals progress:', error);
+    return res.status(500).json({ error: 'Erro ao localizar workspace para metas da equipe' });
+  }
+});
+
+// GET /api/workspaces/:id/team-goals-progress - Get team members weekly goals & progress
+workspacesRouter.get('/:id/team-goals-progress', async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { id } = req.params;
+    const userId = req.userId!;
+
+    const membership = await WorkspaceMember.findOne({
+      where: { workspace_id: id, user_id: userId },
+    });
+    if (!membership) {
+      return res.status(403).json({ error: 'Acesso negado ao workspace' });
+    }
+
+    const members = await WorkspaceMember.findAll({
+      where: { workspace_id: id },
+      include: [{ model: User, as: 'User', attributes: ['id', 'name', 'email'] }],
+    });
+
+    const now = new Date();
+    const dayOfWeek = now.getDay();
+    const daysElapsed = Math.max(1, dayOfWeek === 0 ? 7 : dayOfWeek);
+    const projectionFactor = 7 / daysElapsed;
+    const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+    const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() + diffToMonday);
+
+    const sessions = await TimeSession.findAll({
+      where: {
+        workspace_id: id,
+        start_time: {
+          [Op.gte]: startOfWeek,
+        },
+      },
+    });
+
+    const calcDurationSeconds = (s: any) => {
+      const start = s.start_time ? new Date(s.start_time).getTime() : now.getTime();
+      const end = s.end_time ? new Date(s.end_time).getTime() : now.getTime();
+      return Math.max(0, Math.floor((end - start) / 1000));
+    };
+
+    const weekLoggedMap: Record<string, number> = {};
+
+    sessions.forEach((s: any) => {
+      const uid = s.user_id;
+      const duration = calcDurationSeconds(s);
+      if (!weekLoggedMap[uid]) weekLoggedMap[uid] = 0;
+      weekLoggedMap[uid] += duration;
+    });
+
+    let totalMembersWithGoals = 0;
+    let membersMetGoal = 0;
+    let totalLoggedHoursAll = 0;
+    let totalTargetHoursAll = 0;
+    let totalProjectedHoursAll = 0;
+
+    const memberGoals = members.map((m: any) => {
+      const u = m.User || m.user;
+      const weekSeconds = weekLoggedMap[m.user_id] || 0;
+      const loggedHoursWeek = Number((weekSeconds / 3600).toFixed(2));
+      const projectedHoursWeek = Number((loggedHoursWeek * projectionFactor).toFixed(2));
+      const weeklyTarget = m.weekly_target_hours;
+
+      let weekProgressPercent = 0;
+      let weekStatus: 'met' | 'on_track' | 'behind' | 'no_goal' = 'no_goal';
+      if (weeklyTarget !== null && weeklyTarget !== undefined && weeklyTarget > 0) {
+        weekProgressPercent = Math.min(200, Math.round((loggedHoursWeek / weeklyTarget) * 100));
+        if (loggedHoursWeek >= weeklyTarget) {
+          weekStatus = 'met';
+        } else if (weekProgressPercent >= 60) {
+          weekStatus = 'on_track';
+        } else {
+          weekStatus = 'behind';
+        }
+      }
+
+      if (weeklyTarget !== null && weeklyTarget !== undefined && weeklyTarget > 0) {
+        totalMembersWithGoals++;
+        totalLoggedHoursAll += loggedHoursWeek;
+        totalTargetHoursAll += Number(weeklyTarget);
+        totalProjectedHoursAll += projectedHoursWeek;
+        if (weekStatus === 'met') membersMetGoal++;
+      }
+
+      return {
+        userId: m.user_id,
+        name: u?.name || 'Membro',
+        email: u?.email || '',
+        role: m.role,
+        weekly_target_hours: m.weekly_target_hours ?? null,
+        logged_hours_week: loggedHoursWeek,
+        projected_hours_week: projectedHoursWeek,
+        week_progress_percent: weekProgressPercent,
+        week_status: weekStatus,
+      };
+    });
+
+    const completionRate = totalMembersWithGoals > 0 ? Math.round((membersMetGoal / totalMembersWithGoals) * 100) : 0;
+
+    return res.json({
+      total_members_with_goals: totalMembersWithGoals,
+      members_met_goal: membersMetGoal,
+      team_overall_completion_rate: completionRate,
+      total_logged_hours: Number(totalLoggedHoursAll.toFixed(2)),
+      total_target_hours: Number(totalTargetHoursAll.toFixed(2)),
+      projected_team_hours: Number(totalProjectedHoursAll.toFixed(2)),
+      members: memberGoals,
+    });
+  } catch (err: any) {
+    console.error('Error fetching team goals progress:', err);
+    return res.status(500).json({ error: 'Erro ao buscar progresso das metas da equipe' });
   }
 });
 

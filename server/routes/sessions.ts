@@ -129,7 +129,16 @@ sessionsRouter.get('/', async (req: AuthenticatedRequest, res: Response) => {
 // Retorna o start_time oficial gerado pelo servidor.
 sessionsRouter.post('/start', checkPlanLimit('sessions'), async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const { target_minutes, previous_session_id, title, client_id, notes } = req.body;
+    const {
+      target_minutes,
+      previous_session_id,
+      title,
+      client_id,
+      notes,
+      start_time,
+      retroactive_minutes,
+      retroactive_reason,
+    } = req.body;
 
     // Check if there is already an active session
     const existingActive = await TimeSession.findOne({
@@ -174,7 +183,90 @@ sessionsRouter.post('/start', checkPlanLimit('sessions'), async (req: Authentica
       });
     }
 
-    const serverStartTime = new Date();
+    const serverNow = new Date();
+    let isRetroactive = false;
+    let finalStartTime = serverNow;
+    let resolvedRetroMinutes: number | null = null;
+    let resolvedReason: string | null = null;
+
+    // Check if backdating is requested via retroactive_minutes or past start_time
+    const hasRetroMinutes = retroactive_minutes !== undefined && retroactive_minutes !== null && Number(retroactive_minutes) > 0;
+    const hasPastStartTime = start_time && (serverNow.getTime() - new Date(start_time).getTime() > 60000);
+
+    if (hasRetroMinutes || hasPastStartTime) {
+      isRetroactive = true;
+
+      // 1. Motivo obrigatório (Reason strictly mandatory)
+      if (!retroactive_reason || !String(retroactive_reason).trim()) {
+        return res.status(400).json({
+          error: 'É obrigatório informar o motivo para iniciar o cronômetro com horário retroativo (ex: "Esqueci de iniciar o timer").',
+        });
+      }
+      resolvedReason = String(retroactive_reason).trim();
+
+      // 2. Fetch workspace / tenant max retroactive minutes limit
+      let maxAllowedMinutes = 120; // default 2 hours
+      if (req.workspaceId) {
+        const { Workspace } = await import('../db');
+        const ws = await Workspace.findByPk(req.workspaceId);
+        if (ws && ws.max_retroactive_minutes !== undefined && ws.max_retroactive_minutes !== null) {
+          maxAllowedMinutes = ws.max_retroactive_minutes;
+        }
+      } else if (req.tenant) {
+        if (req.tenant.max_retroactive_minutes !== undefined && req.tenant.max_retroactive_minutes !== null) {
+          maxAllowedMinutes = req.tenant.max_retroactive_minutes;
+        }
+      }
+
+      if (maxAllowedMinutes === 0) {
+        return res.status(400).json({
+          error: 'O início retroativo do cronômetro foi desativado pelo administrador deste workspace (limite: 0 minutos).',
+        });
+      }
+
+      // Calculate the retroactive start time and difference in minutes
+      if (hasRetroMinutes) {
+        const minutesNum = Math.max(1, Math.round(Number(retroactive_minutes)));
+        resolvedRetroMinutes = minutesNum;
+        finalStartTime = new Date(serverNow.getTime() - minutesNum * 60 * 1000);
+      } else {
+        const parsedStart = new Date(start_time);
+        if (isNaN(parsedStart.getTime())) {
+          return res.status(400).json({ error: 'Horário de início retroativo inválido.' });
+        }
+        if (parsedStart.getTime() > serverNow.getTime() + 60000) {
+          return res.status(400).json({ error: 'Não é possível iniciar uma sessão com horário no futuro.' });
+        }
+        finalStartTime = parsedStart;
+        resolvedRetroMinutes = Math.max(1, Math.round((serverNow.getTime() - parsedStart.getTime()) / 60000));
+      }
+
+      // Check max retroactive limit
+      if (resolvedRetroMinutes > maxAllowedMinutes) {
+        return res.status(400).json({
+          error: `O tempo retroativo selecionado (${resolvedRetroMinutes} min) excede o limite máximo permitido pelo workspace (${maxAllowedMinutes} min / ${(maxAllowedMinutes / 60).toFixed(1)}h).`,
+        });
+      }
+
+      // Check for overlap with existing completed sessions
+      const overlappingSession = await TimeSession.findOne({
+        where: {
+          tenant_id: req.tenantId!,
+          user_id: req.userId!,
+          end_time: { [Op.gt]: finalStartTime },
+          start_time: { [Op.lt]: serverNow },
+        },
+        order: [['end_time', 'DESC']],
+      });
+
+      if (overlappingSession && overlappingSession.end_time) {
+        const overlapEndStr = new Date(overlappingSession.end_time).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+        return res.status(400).json({
+          error: `Conflito de horário: já existe uma sessão gravada finalizada às ${overlapEndStr} ("${overlappingSession.title}"). Escolha um horário após o término desta sessão.`,
+        });
+      }
+    }
+
     const publicToken = crypto.randomBytes(16).toString('hex');
 
     const newSession = await TimeSession.create({
@@ -184,11 +276,14 @@ sessionsRouter.post('/start', checkPlanLimit('sessions'), async (req: Authentica
       client_id: client_id || (prevSession ? prevSession.client_id : null),
       title: title?.trim() || (prevSession ? `Continuação: ${prevSession.title}` : 'Sessão de Foco'),
       notes: notes ? String(notes).trim() : null,
-      start_time: serverStartTime,
+      start_time: finalStartTime,
       end_time: null,
       target_minutes: target_minutes ? Number(target_minutes) : null,
       previous_session_id: prevSession ? prevSession.id : null,
       public_token: publicToken,
+      is_retroactive: isRetroactive,
+      retroactive_reason: resolvedReason,
+      retroactive_minutes: resolvedRetroMinutes,
     });
 
     // Fetch with associations

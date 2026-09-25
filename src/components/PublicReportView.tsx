@@ -36,6 +36,7 @@ import { Button } from './ui/button';
 import { Dialog } from './ui/dialog';
 import { apiFetch } from '../utils/api';
 import { Input } from './ui/input';
+import { TaskLinkCard } from './TaskLinkCard';
 
 interface PublicReportViewProps {
   token: string;
@@ -562,7 +563,7 @@ export function PublicReportView({ token, onBackToApp }: PublicReportViewProps) 
                             {s.tasks.map((t) => (
                               <li
                                 key={t.id}
-                                className="text-xs text-neutral-600 dark:text-neutral-300"
+                                className="text-xs text-neutral-600 dark:text-neutral-300 space-y-1.5"
                               >
                                 <div className="flex items-start justify-between gap-2">
                                   <div className="flex items-start gap-1.5 flex-1 min-w-0">
@@ -595,6 +596,9 @@ export function PublicReportView({ token, onBackToApp }: PublicReportViewProps) 
                                       </button>
                                     )}
                                   </div>
+                                </div>
+                                <div className="ml-5">
+                                  <TaskLinkCard notes={t.notes} link={t.link} />
                                 </div>
                                 {t.notes && expandedTaskNotes[t.id] && (
                                   <div className="mt-1.5 ml-5 p-2 rounded-md bg-amber-50/80 dark:bg-amber-950/40 border border-amber-200/70 dark:border-amber-800/50 text-xs text-amber-950 dark:text-amber-200 whitespace-pre-wrap leading-relaxed">

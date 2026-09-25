@@ -18,9 +18,11 @@ import {
   Lock,
   BarChart3,
   ShieldCheck,
+  Target,
 } from 'lucide-react';
 import dayjs from 'dayjs';
-import { ReportData, TimeSession, Client } from '../types';
+import { ReportData, TimeSession, Client, User } from '../types';
+import { TeamGoalsReportTab } from './TeamGoalsReportTab';
 import {
   formatCurrency,
   formatDateTime,
@@ -37,6 +39,7 @@ import { ClientFilterAutocomplete } from './ClientFilterAutocomplete';
 import { SharedReportsManager } from './SharedReportsManager';
 import { MonthlyBillingGoalCard } from './MonthlyBillingGoalCard';
 import { apiFetch } from '../utils/api';
+import { TaskLinkCard } from './TaskLinkCard';
 import {
   ResponsiveContainer,
   BarChart,
@@ -51,7 +54,8 @@ interface ReportsViewProps {
   hourlyRate: number;
   clients: Client[];
   onOpenPublicShare: (token: string) => void;
-  initialSubTab?: 'overview' | 'shared-links';
+  initialSubTab?: 'overview' | 'shared-links' | 'team-goals';
+  currentUser?: User | null;
 }
 
 export function ReportsView({
@@ -59,9 +63,10 @@ export function ReportsView({
   clients,
   onOpenPublicShare,
   initialSubTab = 'overview',
+  currentUser,
 }: ReportsViewProps) {
   const { addToast } = useToast();
-  const [subTab, setSubTab] = useState<'overview' | 'shared-links'>(initialSubTab);
+  const [subTab, setSubTab] = useState<'overview' | 'shared-links' | 'team-goals'>(initialSubTab);
   const [reportData, setReportData] = useState<ReportData | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
 
@@ -305,7 +310,25 @@ export function ReportsView({
           <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
           <span>Relatórios Aprovados &amp; Auditoria</span>
         </button>
+
+        <button
+          type="button"
+          onClick={() => setSubTab('team-goals')}
+          className={`flex-1 sm:flex-initial flex items-center justify-center gap-2 px-3.5 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+            subTab === 'team-goals'
+              ? 'bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 shadow-2xs'
+              : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-200'
+          }`}
+        >
+          <Target className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+          <span>Metas da Equipe</span>
+        </button>
       </div>
+
+      {/* PAGE 3: Metas da Equipe */}
+      {subTab === 'team-goals' && (
+        <TeamGoalsReportTab currentUserId={currentUser?.id || ''} />
+      )}
 
       {/* PAGE 1: Horas & Faturamento */}
       {subTab === 'overview' && (
@@ -732,7 +755,7 @@ export function ReportsView({
                             {taskList.map((t) => (
                               <li
                                 key={t.id}
-                                className="text-xs text-neutral-700 dark:text-neutral-300"
+                                className="text-xs text-neutral-700 dark:text-neutral-300 space-y-1.5"
                               >
                                 <div className="flex items-start justify-between gap-2">
                                   <div className="flex items-start gap-2 flex-1 min-w-0">
@@ -764,6 +787,9 @@ export function ReportsView({
                                       </button>
                                     )}
                                   </div>
+                                </div>
+                                <div className="ml-5">
+                                  <TaskLinkCard notes={t.notes} link={t.link} />
                                 </div>
                                 {t.notes && expandedTaskNotes[t.id] && (
                                   <div className="mt-1.5 ml-5 p-2 rounded-md bg-amber-50/80 dark:bg-amber-950/40 border border-amber-200/70 dark:border-amber-800/50 text-xs text-amber-950 dark:text-amber-200 whitespace-pre-wrap leading-relaxed">

@@ -16,6 +16,7 @@ import { TimeSession, Client } from '../types';
 import { Button } from './ui/button';
 import { useToast } from './ui/toast';
 import { formatCurrency, formatDurationHuman } from '../utils/format';
+import { TaskLinkCard } from './TaskLinkCard';
 
 interface EditTaskItem {
   id?: string;
@@ -478,6 +479,9 @@ export function SessionEditView({
                       placeholder="Observações da tarefa (opcional)..."
                       className="w-full px-3 py-1.5 text-xs rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white/70 dark:bg-neutral-800/70 text-neutral-700 dark:text-neutral-300 focus:outline-none focus:ring-1 focus:ring-indigo-500 resize-y disabled:opacity-60"
                     />
+
+                    {/* Link Metadata Card if notes contain a link */}
+                    <TaskLinkCard notes={t.notes} link={t.link} />
                   </div>
                 );
               })

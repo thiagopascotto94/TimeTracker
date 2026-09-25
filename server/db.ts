@@ -1,4 +1,5 @@
-import { Sequelize, DataTypes, Model, Dialect } from 'sequelize';
+import { Sequelize, DataTypes, Model } from 'sequelize';
+import type { Dialect } from 'sequelize';
 import path from 'path';
 import fs from 'fs';
 import bcrypt from 'bcryptjs';
@@ -444,6 +445,8 @@ export interface TenantAttributes {
   gitlab_project?: string | null;
   gitlab_token?: string | null;
   allowed_repositories?: string | null;
+  timezone?: string | null;
+  max_retroactive_minutes?: number | null;
   created_at?: Date;
 }
 export class Tenant extends Model<TenantAttributes> implements TenantAttributes {
@@ -460,6 +463,8 @@ export class Tenant extends Model<TenantAttributes> implements TenantAttributes 
   public gitlab_project!: string | null;
   public gitlab_token!: string | null;
   public allowed_repositories!: string | null;
+  public timezone!: string | null;
+  public max_retroactive_minutes!: number | null;
   public readonly created_at!: Date;
   public readonly Plan?: Plan;
   public readonly Subscriptions?: Subscription[];
@@ -527,6 +532,16 @@ Tenant.init(
       type: DataTypes.TEXT,
       allowNull: true,
     },
+    timezone: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      defaultValue: 'America/Sao_Paulo',
+    },
+    max_retroactive_minutes: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      defaultValue: 120,
+    },
   },
   {
     sequelize,
@@ -547,6 +562,7 @@ export interface UserAttributes {
   default_hourly_rate: number;
   role?: string; // 'admin' | 'member'
   can_view_billing?: boolean;
+  timezone?: string | null;
 }
 export class User extends Model<UserAttributes> implements UserAttributes {
   public id!: string;
@@ -557,6 +573,7 @@ export class User extends Model<UserAttributes> implements UserAttributes {
   public default_hourly_rate!: number;
   public role!: string;
   public can_view_billing!: boolean;
+  public timezone!: string | null;
 }
 User.init(
   {
@@ -597,6 +614,11 @@ User.init(
       allowNull: false,
       defaultValue: true,
     },
+    timezone: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      defaultValue: 'America/Sao_Paulo',
+    },
   },
   {
     sequelize,
@@ -622,6 +644,8 @@ export interface WorkspaceAttributes {
   default_target_minutes?: number | null;
   default_client_daily_target_minutes?: number | null;
   monthly_billing_goal?: number | null;
+  timezone?: string | null;
+  max_retroactive_minutes?: number | null;
   created_at?: Date;
   updated_at?: Date;
 }
@@ -640,6 +664,8 @@ export class Workspace extends Model<WorkspaceAttributes> implements WorkspaceAt
   public default_target_minutes!: number | null;
   public default_client_daily_target_minutes!: number | null;
   public monthly_billing_goal!: number | null;
+  public timezone!: string | null;
+  public max_retroactive_minutes!: number | null;
   public readonly created_at!: Date;
   public readonly updated_at!: Date;
   public readonly Tenant?: Tenant;
@@ -709,6 +735,16 @@ Workspace.init(
       allowNull: true,
       defaultValue: 10000.0,
     },
+    timezone: {
+      type: DataTypes.STRING,
+      allowNull: true,
+      defaultValue: 'America/Sao_Paulo',
+    },
+    max_retroactive_minutes: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      defaultValue: 120,
+    },
   },
   {
     sequelize,
@@ -725,6 +761,7 @@ export interface WorkspaceMemberAttributes {
   user_id: string;
   role: string; // 'owner' | 'admin' | 'member'
   can_view_billing?: boolean;
+  weekly_target_hours?: number | null;
   created_at?: Date;
   updated_at?: Date;
 }
@@ -734,6 +771,7 @@ export class WorkspaceMember extends Model<WorkspaceMemberAttributes> implements
   public user_id!: string;
   public role!: string;
   public can_view_billing!: boolean;
+  public weekly_target_hours?: number | null;
   public readonly created_at!: Date;
   public readonly updated_at!: Date;
   public readonly Workspace?: Workspace;
@@ -763,6 +801,11 @@ WorkspaceMember.init(
       type: DataTypes.BOOLEAN,
       allowNull: false,
       defaultValue: true,
+    },
+    weekly_target_hours: {
+      type: DataTypes.FLOAT,
+      allowNull: true,
+      defaultValue: null,
     },
   },
   {
@@ -795,6 +838,9 @@ export interface TimeSessionAttributes {
   previous_session_id?: string | null;
   public_token?: string | null;
   hourly_rate?: number | null;
+  is_retroactive?: boolean;
+  retroactive_reason?: string | null;
+  retroactive_minutes?: number | null;
   is_locked?: boolean;
   locked_at?: Date | null;
   locked_reason?: string | null;
@@ -813,6 +859,9 @@ export class TimeSession extends Model<TimeSessionAttributes> implements TimeSes
   public previous_session_id!: string | null;
   public public_token!: string | null;
   public hourly_rate!: number | null;
+  public is_retroactive!: boolean;
+  public retroactive_reason!: string | null;
+  public retroactive_minutes!: number | null;
   public is_locked!: boolean;
   public locked_at!: Date | null;
   public locked_reason!: string | null;
@@ -874,6 +923,19 @@ TimeSession.init(
     },
     hourly_rate: {
       type: DataTypes.FLOAT,
+      allowNull: true,
+    },
+    is_retroactive: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+    },
+    retroactive_reason: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    retroactive_minutes: {
+      type: DataTypes.INTEGER,
       allowNull: true,
     },
     is_locked: {
@@ -1883,14 +1945,25 @@ export async function initDb() {
   await addColumnIfNotExists('workspaces', 'default_target_minutes', 'INTEGER DEFAULT 60');
   await addColumnIfNotExists('workspaces', 'default_client_daily_target_minutes', 'INTEGER DEFAULT 120');
   await addColumnIfNotExists('workspaces', 'monthly_billing_goal', 'FLOAT DEFAULT 10000.0');
+  await addColumnIfNotExists('workspaces', 'timezone', "VARCHAR(100) DEFAULT 'America/Sao_Paulo'");
+  await addColumnIfNotExists('tenants', 'timezone', "VARCHAR(100) DEFAULT 'America/Sao_Paulo'");
+  await addColumnIfNotExists('users', 'timezone', "VARCHAR(100) DEFAULT 'America/Sao_Paulo'");
+
+  // Retroactive timer configuration and session tracking migration
+  await addColumnIfNotExists('workspaces', 'max_retroactive_minutes', 'INTEGER DEFAULT 120');
+  await addColumnIfNotExists('tenants', 'max_retroactive_minutes', 'INTEGER DEFAULT 120');
+  await addColumnIfNotExists('time_sessions', 'is_retroactive', 'BOOLEAN DEFAULT 0');
+  await addColumnIfNotExists('time_sessions', 'retroactive_reason', 'TEXT');
+  await addColumnIfNotExists('time_sessions', 'retroactive_minutes', 'INTEGER');
 
   // Plan columns migration
   await addColumnIfNotExists('plans', 'max_workspaces', 'INTEGER DEFAULT 1');
   await addColumnIfNotExists('plans', 'max_sessions_per_month', 'INTEGER DEFAULT -1');
 
-  // Can view billing permissions migration
+  // Can view billing permissions & goals migration
   await addColumnIfNotExists('users', 'can_view_billing', 'BOOLEAN DEFAULT 1');
   await addColumnIfNotExists('workspace_members', 'can_view_billing', 'BOOLEAN DEFAULT 1');
+  await addColumnIfNotExists('workspace_members', 'weekly_target_hours', 'FLOAT DEFAULT NULL');
   await addColumnIfNotExists('invites', 'can_view_billing', 'BOOLEAN DEFAULT 1');
 
   // Ensure WorkspaceAiDailyUsage table exists

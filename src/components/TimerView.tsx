@@ -26,10 +26,12 @@ import {
   ExternalLink,
   Link as LinkIcon,
   BookOpen,
+  History,
 } from 'lucide-react';
 import dayjs from 'dayjs';
 import { TimeSession, TaskItem, Client, Tenant } from '../types';
 import { NotesView } from './NotesView';
+import { RetroactiveTimePicker } from './RetroactiveTimePicker';
 import {
   formatTimeHHMMSS,
   formatCurrency,
@@ -49,6 +51,7 @@ import { OnboardingChecklist } from './OnboardingChecklist';
 import { useToast } from './ui/toast';
 import { apiFetch } from '../utils/api';
 import { GitCommitModal } from './GitCommitModal';
+import { TaskLinkCard } from './TaskLinkCard';
 
 interface TimerViewProps {
   activeSession: TimeSession | null;
@@ -64,6 +67,9 @@ interface TimerViewProps {
     target_minutes: number | null;
     previous_session_id: string | null;
     client_id: string | null;
+    start_time?: string | null;
+    retroactive_minutes?: number | null;
+    retroactive_reason?: string | null;
   }) => Promise<void>;
   onStopSession: (sessionId: string, finalTitle?: string, finalNotes?: string) => Promise<void>;
   onUpdateSessionTitle?: (sessionId: string, title: string) => Promise<void>;
@@ -157,6 +163,20 @@ export function TimerView({
   });
   const [customTarget, setCustomTarget] = useState('');
   const [clientId, setClientId] = useState<string>('');
+
+  // Retroactive session state (Clock-based)
+  const [isRetroactive, setIsRetroactive] = useState(false);
+  const [retroMinutes, setRetroMinutes] = useState<number>(15);
+  const [retroTimeStr, setRetroTimeStr] = useState<string>('');
+  const [retroStartTimeIso, setRetroStartTimeIso] = useState<string>('');
+  const [retroIsValid, setRetroIsValid] = useState<boolean>(true);
+  const [retroReason, setRetroReason] = useState<string>('');
+
+  const maxAllowedRetroMinutes =
+    tenant?.max_retroactive_minutes !== undefined && tenant?.max_retroactive_minutes !== null
+      ? tenant.max_retroactive_minutes
+      : 120;
+
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(
     Boolean(targetMinutes || customTarget || resumeSession)
   );
@@ -319,6 +339,42 @@ export function TimerView({
 
   const handleStart = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (isRetroactive) {
+      if (maxAllowedRetroMinutes === 0) {
+        effectiveAddToast({
+          title: 'Início retroativo desativado',
+          description: 'O início retroativo de cronômetro está desativado pelo dono do workspace.',
+          variant: 'destructive',
+        });
+        return;
+      }
+      if (!retroIsValid || !retroMinutes || retroMinutes <= 0) {
+        effectiveAddToast({
+          title: 'Horário retroativo inválido',
+          description: 'Por favor, selecione no relógio um horário válido anterior ao momento atual.',
+          variant: 'destructive',
+        });
+        return;
+      }
+      if (retroMinutes > maxAllowedRetroMinutes) {
+        effectiveAddToast({
+          title: 'Limite excedido',
+          description: `O tempo máximo retroativo permitido neste workspace é de ${maxAllowedRetroMinutes} minutos (${(maxAllowedRetroMinutes / 60).toFixed(1)}h). O horário selecionado corresponde a ${retroMinutes} minutos atrás.`,
+          variant: 'destructive',
+        });
+        return;
+      }
+      if (!retroReason.trim()) {
+        effectiveAddToast({
+          title: 'Motivo obrigatório',
+          description: 'É obrigatório informar o motivo para o início retroativo (ex: "esqueci de iniciar o timer ao iniciar o desenvolvimento").',
+          variant: 'destructive',
+        });
+        return;
+      }
+    }
+
     const finalTarget = customTarget ? Number(customTarget) : targetMinutes;
     await onStartSession({
       title: title.trim(),
@@ -326,10 +382,18 @@ export function TimerView({
       target_minutes: finalTarget && finalTarget > 0 ? finalTarget : null,
       previous_session_id: resumeSession ? resumeSession.id : null,
       client_id: clientId ? clientId : null,
+      start_time: isRetroactive && retroStartTimeIso ? retroStartTimeIso : null,
+      retroactive_minutes: isRetroactive ? Number(retroMinutes) : null,
+      retroactive_reason: isRetroactive ? retroReason.trim() : null,
     });
     setTitle('');
     setCustomTarget('');
     setClientId('');
+    setIsRetroactive(false);
+    setRetroMinutes(15);
+    setRetroTimeStr('');
+    setRetroStartTimeIso('');
+    setRetroReason('');
     if (onClearResumeSession) onClearResumeSession();
   };
 
@@ -543,6 +607,24 @@ export function TimerView({
                       </Badge>
                     </div>
                   )}
+
+                  {/* Retroactive Session Badge */}
+                  {activeSession.is_retroactive ? (
+                    <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                      <Badge
+                        variant="outline"
+                        className="text-xs gap-1.5 border-purple-300 dark:border-purple-800 bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 font-medium"
+                      >
+                        <History className="w-3 h-3 text-purple-600 dark:text-purple-400" />
+                        <span>Início Retroativo ({activeSession.retroactive_minutes || 0}m atrás)</span>
+                      </Badge>
+                      {activeSession.retroactive_reason && (
+                        <span className="text-2xs text-purple-700 dark:text-purple-300 bg-purple-50 dark:bg-purple-950/30 px-2 py-0.5 rounded border border-purple-200/60 dark:border-purple-850/60 italic font-medium">
+                          Motivo: "{activeSession.retroactive_reason}"
+                        </span>
+                      )}
+                    </div>
+                  ) : null}
 
                   {/* Title View or Inline Edit */}
                   {isEditingTitle ? (
@@ -987,6 +1069,9 @@ export function TimerView({
                           </div>
                         </div>
 
+                        {/* Link Metadata Card if notes contain a link */}
+                        <TaskLinkCard notes={task.notes} link={task.link} />
+
                         {/* Secondary Row: Badges / Links & Action buttons in new lines */}
                         <div className="flex flex-wrap items-center justify-between gap-2.5 pt-2 border-t border-neutral-100 dark:border-neutral-800/60">
                           <div className="flex items-center gap-2 flex-wrap">
@@ -1087,6 +1172,8 @@ export function TimerView({
                                 autoFocus
                                 className="w-full text-xs p-2.5 rounded-md border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 placeholder:text-neutral-400 focus:outline-none focus:ring-2 focus:ring-amber-500/50"
                               />
+                              {/* Live preview of links while editing notes */}
+                              <TaskLinkCard notes={taskNotesValue} />
                               <div className="flex items-center justify-end gap-2">
                                 <Button
                                   type="button"
@@ -1237,6 +1324,90 @@ export function TimerView({
                     )}
                   </div>
                 ) : null}
+              </div>
+
+              {/* Retroactive Timer Start Option */}
+              <div className="p-3.5 rounded-xl border border-neutral-200 dark:border-neutral-800 bg-neutral-50/70 dark:bg-neutral-850/60 space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      id="retroactive-toggle"
+                      checked={isRetroactive}
+                      onChange={(e) => {
+                        if (maxAllowedRetroMinutes === 0 && e.target.checked) {
+                          effectiveAddToast({
+                            title: 'Recurso Desativado',
+                            description: 'O início retroativo foi desativado nas configurações deste workspace.',
+                            variant: 'destructive',
+                          });
+                          return;
+                        }
+                        setIsRetroactive(e.target.checked);
+                      }}
+                      disabled={maxAllowedRetroMinutes === 0}
+                      className="w-4 h-4 rounded border-neutral-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer disabled:opacity-50"
+                    />
+                    <div className="flex items-center gap-1.5">
+                      <History className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                      <span className={`text-xs font-semibold ${maxAllowedRetroMinutes === 0 ? 'text-neutral-400 dark:text-neutral-500' : 'text-neutral-800 dark:text-neutral-200'}`}>
+                        Iniciar a partir de um tempo anterior (Retroativo)
+                      </span>
+                    </div>
+                  </label>
+
+                  <Badge
+                    variant="outline"
+                    className="text-3xs font-mono text-neutral-600 dark:text-neutral-400 border-neutral-300 dark:border-neutral-700"
+                  >
+                    {maxAllowedRetroMinutes === 0 ? 'Desativado' : `Limite: ${maxAllowedRetroMinutes}m`}
+                  </Badge>
+                </div>
+
+                {maxAllowedRetroMinutes === 0 && (
+                  <p className="text-2xs text-amber-600 dark:text-amber-400">
+                    O administrador/dono do workspace desativou o início retroativo nas configurações.
+                  </p>
+                )}
+
+                {isRetroactive && maxAllowedRetroMinutes > 0 && (
+                  <div className="space-y-4 pt-2 border-t border-neutral-200 dark:border-neutral-700/80 animate-in fade-in-50 duration-200">
+                    <RetroactiveTimePicker
+                      maxAllowedMinutes={maxAllowedRetroMinutes}
+                      onTimeChange={({ selectedTimeStr, calculatedMinutes, isValid, startTimeIso }) => {
+                        setRetroTimeStr(selectedTimeStr);
+                        setRetroMinutes(calculatedMinutes);
+                        setRetroIsValid(isValid);
+                        setRetroStartTimeIso(startTimeIso);
+                      }}
+                    />
+
+                    {/* Mandatory Reason */}
+                    <div className="space-y-1.5 pt-1">
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-semibold text-neutral-800 dark:text-neutral-200">
+                          Motivo do Início Retroativo <span className="text-red-500">*</span>
+                        </label>
+                        <span className="text-3xs font-semibold uppercase tracking-wider text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/60 px-1.5 py-0.5 rounded border border-red-200 dark:border-red-900/60">
+                          Obrigatório
+                        </span>
+                      </div>
+                      <Input
+                        value={retroReason}
+                        onChange={(e) => setRetroReason(e.target.value)}
+                        placeholder="Ex: Esqueci de iniciar o timer ao começar a reunião"
+                        className={`text-xs ${
+                          !retroReason.trim()
+                            ? 'border-amber-400 dark:border-amber-600 focus:border-red-500'
+                            : 'border-emerald-400 dark:border-emerald-600'
+                        }`}
+                      />
+                      <p className="text-2xs text-neutral-500 dark:text-neutral-400">
+                        O motivo e o horário de início serão registrados no histórico e relatórios para auditoria.
+                      </p>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Progressive Disclosure Toggle for Advanced Options */}
@@ -1529,27 +1700,28 @@ export function TimerView({
 
       {/* Notes Slide-Over Drawer */}
       {isNotesDrawerOpen && (
-        <div className="fixed inset-0 z-50 flex justify-end bg-black/50 backdrop-blur-xs transition-opacity">
-          <div className="w-full sm:max-w-2xl bg-white dark:bg-neutral-900 shadow-2xl border-l border-neutral-200 dark:border-neutral-800 flex flex-col h-full">
-            <div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900 shrink-0">
+        <div className="fixed inset-0 z-50 flex justify-end bg-black/50 backdrop-blur-xs transition-opacity animate-in fade-in duration-150">
+          <div className="w-full sm:max-w-3xl lg:max-w-4xl xl:max-w-5xl bg-white dark:bg-neutral-900 shadow-2xl border-l border-neutral-200 dark:border-neutral-800 flex flex-col h-full animate-in slide-in-from-right duration-200">
+            <div className="flex items-center justify-between px-4 py-2.5 border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-900 shrink-0">
               <div className="flex items-center gap-2">
-                <BookOpen className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
-                <h3 className="font-semibold text-base sm:text-lg text-neutral-900 dark:text-neutral-100">Gaveta de Anotações & TODO</h3>
+                <BookOpen className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                <h3 className="font-semibold text-sm text-neutral-900 dark:text-neutral-100">Gaveta de Anotações &amp; TODO</h3>
               </div>
               <Button
                 type="button"
                 variant="ghost"
                 size="sm"
                 onClick={() => setIsNotesDrawerOpen(false)}
-                className="h-8 w-8 p-0 rounded-full hover:bg-neutral-200 dark:hover:bg-neutral-800 cursor-pointer"
+                className="h-7 w-7 p-0 rounded-lg hover:bg-neutral-200 dark:hover:bg-neutral-800 cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </Button>
             </div>
-            <div className="flex-1 overflow-y-auto p-3 sm:p-6 bg-neutral-50/50 dark:bg-neutral-950/50 min-h-0">
+            <div className="flex-1 p-3 bg-neutral-50/40 dark:bg-neutral-950/40 min-h-0 overflow-hidden flex flex-col">
               <NotesView
                 currentUserId={currentUserId || ''}
                 addToast={effectiveAddToast}
+                isDrawer={true}
               />
             </div>
           </div>

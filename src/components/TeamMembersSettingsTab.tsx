@@ -29,6 +29,7 @@ interface MemberItem {
   role: string;
   default_hourly_rate: number;
   can_view_billing?: boolean;
+  weekly_target_hours?: number | null;
   created_at: string;
 }
 
@@ -207,6 +208,41 @@ export function TeamMembersSettingsTab({
       );
       addToast({
         title: 'Erro ao atualizar',
+        description: err.message,
+        variant: 'destructive',
+      });
+    } finally {
+      setUpdatingMemberId(null);
+    }
+  };
+
+  const handleUpdateTargets = async (memberId: string, weekly: number | null) => {
+    try {
+      setUpdatingMemberId(memberId);
+      const activeWsId = localStorage.getItem('cronos_active_workspace_id') || tenant?.id;
+      const res = await apiFetch(`/api/workspaces/${activeWsId}/members/${memberId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ weekly_target_hours: weekly }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Falha ao atualizar metas');
+      }
+
+      setMembers((prev) =>
+        prev.map((m) => (m.id === memberId ? { ...m, weekly_target_hours: weekly } : m))
+      );
+
+      addToast({
+        title: 'Meta atualizada',
+        description: 'A meta de horas semanais do membro foi salva com sucesso.',
+        variant: 'success',
+      });
+    } catch (err: any) {
+      addToast({
+        title: 'Erro ao salvar meta',
         description: err.message,
         variant: 'destructive',
       });
@@ -456,12 +492,13 @@ export function TeamMembersSettingsTab({
         <CardContent className="p-0">
           <div className="overflow-x-auto">
             <table className="w-full text-xs text-left border-collapse">
-              <thead className="bg-neutral-50 dark:bg-neutral-800/60 border-b border-neutral-200 dark:border-neutral-800 text-neutral-600 dark:text-neutral-400">
+               <thead className="bg-neutral-50 dark:bg-neutral-800/60 border-b border-neutral-200 dark:border-neutral-800 text-neutral-600 dark:text-neutral-400">
                 <tr>
                   <th className="px-4 py-2.5 font-semibold">Nome &amp; E-mail</th>
                   <th className="px-4 py-2.5 font-semibold">Função</th>
                   <th className="px-4 py-2.5 font-semibold text-center">Ver Faturamento</th>
                   <th className="px-4 py-2.5 font-semibold">Taxa Padrão</th>
+                  <th className="px-4 py-2.5 font-semibold text-center">Meta Semanal (h)</th>
                   <th className="px-4 py-2.5 font-semibold">Membro Desde</th>
                 </tr>
               </thead>
@@ -540,6 +577,26 @@ export function TeamMembersSettingsTab({
                     </td>
                     <td className="px-4 py-3 text-neutral-700 dark:text-neutral-300 font-mono">
                       R$ {Number(m.default_hourly_rate || 0).toFixed(2)}/h
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <input
+                        type="number"
+                        step="1"
+                        min="0"
+                        max="168"
+                        placeholder="Ex: 40"
+                        value={m.weekly_target_hours ?? ''}
+                        onChange={(e) => {
+                          const val = e.target.value === '' ? null : Number(e.target.value);
+                          setMembers((prev) => prev.map((item) => (item.id === m.id ? { ...item, weekly_target_hours: val } : item)));
+                        }}
+                        onBlur={(e) => {
+                          const val = e.target.value === '' ? null : Number(e.target.value);
+                          handleUpdateTargets(m.id, val);
+                        }}
+                        className="w-20 px-2 py-1 text-xs text-center rounded border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 focus:ring-1 focus:ring-indigo-500"
+                        title="Meta de horas semanais (ex: 40)"
+                      />
                     </td>
                     <td className="px-4 py-3 text-neutral-500 dark:text-neutral-400 text-2xs">
                       {new Date(m.created_at).toLocaleDateString('pt-BR')}

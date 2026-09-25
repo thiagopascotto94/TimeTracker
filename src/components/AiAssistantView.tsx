@@ -31,6 +31,7 @@ import {
   UserPlus,
   Edit3,
   GitCommit,
+  Globe,
 } from 'lucide-react';
 import {
   User,
@@ -306,6 +307,7 @@ export function AiAssistantView({
           model: selectedModel,
           maxSteps,
           provider: providerInfo?.activeProvider === 'kilo' ? 'kilo' : undefined,
+          timezone: user?.timezone || localStorage.getItem('cronos_user_timezone') || undefined,
         }),
       });
 
@@ -470,6 +472,16 @@ export function AiAssistantView({
               )}
             </div>
           )}
+
+          {/* User Timezone Indicator */}
+          <button
+            onClick={() => onNavigateToSettings?.()}
+            className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-2xs font-medium border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-850 text-neutral-600 dark:text-neutral-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:border-indigo-300 dark:hover:border-indigo-700 transition-colors cursor-pointer"
+            title={`Fuso Horário Ativo do Cronos AI: ${user?.timezone || 'America/Sao_Paulo'}. Clique para alterar nas Configurações.`}
+          >
+            <Globe className="w-3 h-3 text-indigo-500" />
+            <span className="font-mono">{user?.timezone || 'America/Sao_Paulo'}</span>
+          </button>
 
           {/* Clear Button */}
           {messages.length > 0 && (

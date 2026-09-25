@@ -15,6 +15,7 @@
 | **04** | **Equipe em Tempo Real (Team Pulse)** | Visibilidade instantânea de quem está ativo no time | [`04-equipe-tempo-real-team-pulse.md`](./04-equipe-tempo-real-team-pulse.md) | ✅ Concluído |
 | **05** | **Onboarding & Empty States Educativos** | Primeiros passos fluídos para novos usuários e convidados | [`05-onboarding-e-empty-states.md`](./05-onboarding-e-empty-states.md) | ✅ Concluído |
 | **06** | **Microinterações & Celebração de Metas** | Satisfação visual (*Delight*) e feedback refinado | [`06-microinteracoes-e-celebracao-metas.md`](./06-microinteracoes-e-celebracao-metas.md) | ✅ Concluído |
+| **07** | **Metas de Horas por Membro (Diária / Semanal)** | Definição para o dono e aferição em Relatórios & Team Pulse | [`07-metas-de-horas-equipe-e-afericao.md`](./07-metas-de-horas-equipe-e-afericao.md) | 📋 Planejado |
 
 ---
 

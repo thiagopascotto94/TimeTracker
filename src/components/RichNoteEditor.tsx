@@ -10,24 +10,24 @@ import {
   CheckSquare,
   Code,
   Link as LinkIcon,
-  Eye,
-  Edit3,
   Lock,
   Globe,
   Pin,
   Trash2,
   Check,
   Loader2,
-  Share2
+  PanelLeftClose,
+  PanelLeft,
 } from 'lucide-react';
 import { NoteItem } from '../types';
-import { Button } from './ui/button';
 
 interface RichNoteEditorProps {
   note: NoteItem;
   currentUserId: string;
   onUpdate: (updatedData: { title?: string; content?: string; is_workspace_shared?: boolean; is_pinned?: boolean }) => Promise<void>;
   onDelete: () => Promise<void>;
+  onToggleSidebar?: () => void;
+  isSidebarOpen?: boolean;
 }
 
 export const RichNoteEditor: React.FC<RichNoteEditorProps> = ({
@@ -35,6 +35,8 @@ export const RichNoteEditor: React.FC<RichNoteEditorProps> = ({
   currentUserId,
   onUpdate,
   onDelete,
+  onToggleSidebar,
+  isSidebarOpen = true,
 }) => {
   const [title, setTitle] = useState(note.title);
   const [content, setContent] = useState(note.content || '');
@@ -72,7 +74,7 @@ export const RichNoteEditor: React.FC<RichNoteEditorProps> = ({
         console.error('Auto-save error:', err);
         setSavingStatus('unsaved');
       }
-    }, 800);
+    }, 700);
   };
 
   const handleTitleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -128,11 +130,7 @@ export const RichNoteEditor: React.FC<RichNoteEditorProps> = ({
     const target = e.target as HTMLElement;
     if (target && target.tagName === 'INPUT' && (target as HTMLInputElement).type === 'checkbox') {
       const checkbox = target as HTMLInputElement;
-      // Find corresponding markdown line in content and toggle [ ] to [x] or vice versa
-      // Simple approximation: toggle nearest `- [ ]` or `- [x]`
       const isChecked = checkbox.checked;
-      // We can let react-markdown handle rendering, but to make checkboxes truly interactive in preview:
-      // Let's parse text lines and toggle the N-th checkbox found in content
       const allCheckboxes = Array.from(textareaRef.current?.form?.querySelectorAll('input[type="checkbox"]') || []);
       const index = allCheckboxes.indexOf(checkbox);
       if (index !== -1) {
@@ -151,25 +149,38 @@ export const RichNoteEditor: React.FC<RichNoteEditorProps> = ({
     }
   };
 
-  const canEdit = note.user_id === currentUserId || isShared;
-
   return (
-    <div className="flex flex-col h-full bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl overflow-hidden shadow-sm">
-      {/* Editor Header */}
-      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50/50 dark:bg-neutral-900/50">
-        <div className="flex items-center gap-2 flex-1 min-w-[200px]">
+    <div className="flex flex-col h-full bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-xl overflow-hidden shadow-xs">
+      {/* Compact Editor Header */}
+      <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50/70 dark:bg-neutral-900/70 shrink-0">
+        <div className="flex items-center gap-1.5 flex-1 min-w-0">
+          {onToggleSidebar && (
+            <button
+              type="button"
+              onClick={onToggleSidebar}
+              className="p-1 rounded-md text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-100 hover:bg-neutral-200/70 dark:hover:bg-neutral-800 transition-colors shrink-0"
+              title={isSidebarOpen ? 'Recolher lista de notas' : 'Expandir lista de notas'}
+            >
+              {isSidebarOpen ? (
+                <PanelLeftClose className="w-4 h-4" />
+              ) : (
+                <PanelLeft className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+              )}
+            </button>
+          )}
+
           <input
             type="text"
             value={title}
             onChange={handleTitleChange}
             placeholder="Título da nota..."
-            className="w-full bg-transparent font-semibold text-lg text-neutral-900 dark:text-neutral-100 focus:outline-none focus:ring-1 focus:ring-indigo-500 rounded px-1"
+            className="w-full bg-transparent font-medium text-sm sm:text-base text-neutral-900 dark:text-neutral-100 focus:outline-hidden focus:ring-1 focus:ring-indigo-500 rounded px-1.5 py-0.5 truncate"
           />
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 shrink-0">
           {/* Status saving indicator */}
-          <span className="text-2xs text-neutral-400 dark:text-neutral-500 flex items-center gap-1 font-medium">
+          <span className="text-2xs text-neutral-400 dark:text-neutral-500 hidden sm:flex items-center gap-1 font-medium whitespace-nowrap">
             {savingStatus === 'saving' && (
               <>
                 <Loader2 className="w-3 h-3 animate-spin text-indigo-500" />
@@ -187,155 +198,168 @@ export const RichNoteEditor: React.FC<RichNoteEditorProps> = ({
 
           {/* Privacy Toggle Button */}
           <button
+            type="button"
             onClick={handleToggleShared}
-            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+            className={`inline-flex items-center gap-1 px-2 py-1 rounded-md text-2xs font-semibold whitespace-nowrap transition-colors cursor-pointer ${
               isShared
-                ? 'bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800'
-                : 'bg-neutral-100 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300 border border-neutral-200 dark:border-neutral-700'
+                ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800'
+                : 'bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400 border border-neutral-200 dark:border-neutral-700'
             }`}
             title={isShared ? 'Nota compartilhada com o workspace' : 'Nota privada (apenas você)'}
           >
-            {isShared ? <Globe className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5" />}
+            {isShared ? <Globe className="w-3 h-3" /> : <Lock className="w-3 h-3" />}
             <span>{isShared ? 'Equipe' : 'Privada'}</span>
           </button>
 
           {/* Pin Button */}
           <button
+            type="button"
             onClick={handleTogglePin}
-            className={`p-1.5 rounded-lg transition-colors ${
+            className={`p-1 rounded-md transition-colors cursor-pointer shrink-0 ${
               isPinned
                 ? 'bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-400'
                 : 'text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800'
             }`}
             title={isPinned ? 'Desafixar nota' : 'Fixar no topo'}
           >
-            <Pin className="w-4 h-4" />
+            <Pin className="w-3.5 h-3.5" />
           </button>
 
           {/* View Mode toggles */}
-          <div className="hidden sm:flex items-center bg-neutral-200/60 dark:bg-neutral-800 p-0.5 rounded-lg">
+          <div className="flex items-center bg-neutral-200/70 dark:bg-neutral-800 p-0.5 rounded-md shrink-0">
             <button
+              type="button"
               onClick={() => setViewMode('edit')}
-              className={`px-2.5 py-1 text-xs font-medium rounded-md transition-all ${
+              className={`px-2 py-0.5 text-2xs font-medium rounded transition-all cursor-pointer whitespace-nowrap ${
                 viewMode === 'edit'
-                  ? 'bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 shadow-xs'
+                  ? 'bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 shadow-2xs'
                   : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900'
               }`}
             >
               Editar
             </button>
             <button
+              type="button"
               onClick={() => setViewMode('preview')}
-              className={`px-2.5 py-1 text-xs font-medium rounded-md transition-all ${
+              className={`px-2 py-0.5 text-2xs font-medium rounded transition-all cursor-pointer whitespace-nowrap ${
                 viewMode === 'preview'
-                  ? 'bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 shadow-xs'
+                  ? 'bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 shadow-2xs'
                   : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900'
               }`}
             >
-              Visualizar
+              Ver
             </button>
           </div>
 
           {/* Delete Button */}
           <button
+            type="button"
             onClick={onDelete}
-            className="p-1.5 text-neutral-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 rounded-lg transition-colors"
+            className="p-1 text-neutral-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 rounded-md transition-colors cursor-pointer shrink-0"
             title="Excluir nota"
           >
-            <Trash2 className="w-4 h-4" />
+            <Trash2 className="w-3.5 h-3.5" />
           </button>
         </div>
       </div>
 
-      {/* Toolbar (Visible in edit or split mode) */}
+      {/* Sleek Compact Toolbar */}
       {(viewMode === 'edit' || viewMode === 'split') && (
-        <div className="flex flex-wrap items-center gap-1 px-3 py-1.5 bg-neutral-100/70 dark:bg-neutral-850/70 border-b border-neutral-200 dark:border-neutral-800 text-neutral-600 dark:text-neutral-400">
+        <div className="flex items-center gap-0.5 px-2.5 py-1 bg-neutral-50 dark:bg-neutral-850/60 border-b border-neutral-200 dark:border-neutral-800 text-neutral-600 dark:text-neutral-400 text-xs overflow-x-auto shrink-0">
           <button
-            onClick={() => insertFormatting('**', '**', 'texto em negrito')}
-            className="p-1.5 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded transition-colors"
+            type="button"
+            onClick={() => insertFormatting('**', '**', 'negrito')}
+            className="p-1 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded transition-colors cursor-pointer"
             title="Negrito"
           >
-            <Bold className="w-4 h-4" />
+            <Bold className="w-3.5 h-3.5" />
           </button>
           <button
-            onClick={() => insertFormatting('*', '*', 'texto em itálico')}
-            className="p-1.5 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded transition-colors"
+            type="button"
+            onClick={() => insertFormatting('*', '*', 'itálico')}
+            className="p-1 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded transition-colors cursor-pointer"
             title="Itálico"
           >
-            <Italic className="w-4 h-4" />
+            <Italic className="w-3.5 h-3.5" />
           </button>
-          <div className="w-px h-4 bg-neutral-300 dark:bg-neutral-700 mx-1" />
+          <div className="w-px h-3.5 bg-neutral-300 dark:bg-neutral-700 mx-1 shrink-0" />
           <button
+            type="button"
             onClick={() => insertFormatting('# ', '', 'Título 1')}
-            className="p-1.5 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded transition-colors"
+            className="p-1 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded transition-colors cursor-pointer"
             title="Título 1"
           >
-            <Heading1 className="w-4 h-4" />
+            <Heading1 className="w-3.5 h-3.5" />
           </button>
           <button
+            type="button"
             onClick={() => insertFormatting('## ', '', 'Título 2')}
-            className="p-1.5 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded transition-colors"
+            className="p-1 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded transition-colors cursor-pointer"
             title="Título 2"
           >
-            <Heading2 className="w-4 h-4" />
+            <Heading2 className="w-3.5 h-3.5" />
           </button>
-          <div className="w-px h-4 bg-neutral-300 dark:bg-neutral-700 mx-1" />
+          <div className="w-px h-3.5 bg-neutral-300 dark:bg-neutral-700 mx-1 shrink-0" />
           <button
+            type="button"
             onClick={() => insertFormatting('- ', '', 'Item de lista')}
-            className="p-1.5 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded transition-colors"
+            className="p-1 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded transition-colors cursor-pointer"
             title="Lista com marcadores"
           >
-            <List className="w-4 h-4" />
+            <List className="w-3.5 h-3.5" />
           </button>
           <button
+            type="button"
             onClick={insertTask}
-            className="p-1.5 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded transition-colors flex items-center gap-1 text-xs font-medium"
+            className="px-1.5 py-1 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded transition-colors flex items-center gap-1 text-2xs font-semibold text-emerald-600 dark:text-emerald-400 cursor-pointer whitespace-nowrap"
             title="Adicionar Tarefa (TODO)"
           >
-            <CheckSquare className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-            <span className="hidden md:inline">TODO</span>
+            <CheckSquare className="w-3.5 h-3.5" />
+            <span>TODO</span>
           </button>
-          <div className="w-px h-4 bg-neutral-300 dark:bg-neutral-700 mx-1" />
+          <div className="w-px h-3.5 bg-neutral-300 dark:bg-neutral-700 mx-1 shrink-0" />
           <button
+            type="button"
             onClick={() => insertFormatting('`', '`', 'código')}
-            className="p-1.5 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded transition-colors"
+            className="p-1 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded transition-colors cursor-pointer"
             title="Código em linha"
           >
-            <Code className="w-4 h-4" />
+            <Code className="w-3.5 h-3.5" />
           </button>
           <button
-            onClick={() => insertFormatting('[', '](https://)', 'texto do link')}
-            className="p-1.5 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded transition-colors"
+            type="button"
+            onClick={() => insertFormatting('[', '](https://)', 'link')}
+            className="p-1 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded transition-colors cursor-pointer"
             title="Link"
           >
-            <LinkIcon className="w-4 h-4" />
+            <LinkIcon className="w-3.5 h-3.5" />
           </button>
         </div>
       )}
 
       {/* Main Editor / Preview Body */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden min-h-0">
         {(viewMode === 'edit' || viewMode === 'split') && (
-          <div className={`flex-1 p-4 ${viewMode === 'split' ? 'border-r border-neutral-200 dark:border-neutral-800' : ''} flex flex-col`}>
+          <div className={`flex-1 p-3 sm:p-4 ${viewMode === 'split' ? 'border-r border-neutral-200 dark:border-neutral-800' : ''} flex flex-col min-h-0 overflow-hidden`}>
             <textarea
               ref={textareaRef}
               value={content}
               onChange={handleContentChange}
-              placeholder="Digite suas anotações, ideias ou listas de tarefas aqui... (use - [ ] para criar TODOs)"
-              className="w-full flex-1 bg-transparent text-neutral-900 dark:text-neutral-100 font-mono text-sm leading-relaxed focus:outline-none resize-none"
+              placeholder="Escreva suas anotações ou tarefas aqui... (Dica: digite - [ ] para criar TODOs)"
+              className="w-full flex-1 bg-transparent text-neutral-900 dark:text-neutral-100 font-sans text-xs sm:text-sm leading-relaxed focus:outline-hidden resize-none overflow-y-auto"
             />
           </div>
         )}
 
         {(viewMode === 'preview' || viewMode === 'split') && (
           <div
-            className="flex-1 p-5 overflow-y-auto prose dark:prose-invert max-w-none bg-neutral-50/30 dark:bg-neutral-900/30 text-sm"
+            className="flex-1 p-3 sm:p-4 overflow-y-auto prose prose-sm dark:prose-invert max-w-none bg-neutral-50/40 dark:bg-neutral-900/40 text-xs sm:text-sm leading-relaxed"
             onClick={handleMarkdownCheckboxClick}
           >
             {content.trim() ? (
               <Markdown remarkPlugins={[remarkGfm]}>{content}</Markdown>
             ) : (
-              <p className="text-neutral-400 italic">Pré-visualização vazia...</p>
+              <p className="text-neutral-400 italic text-xs">Nota vazia...</p>
             )}
           </div>
         )}

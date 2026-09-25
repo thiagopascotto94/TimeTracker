@@ -2,7 +2,7 @@ import { Router, Response } from 'express';
 import { GoogleGenAI, Type, FunctionDeclaration } from '@google/genai';
 import { Op } from 'sequelize';
 import crypto from 'crypto';
-import { TimeSession, Task, Client, User, AiMessage, ClientContact, Tenant, Workspace, Note } from '../db';
+import { TimeSession, Task, Client, User, AiMessage, ClientContact, Tenant, Workspace, Note, WorkspaceMember } from '../db';
 import { authMiddleware, AuthenticatedRequest } from '../auth';
 import { getKiloConfig, getKiloClient, runKiloAgenticChat } from '../kilo';
 import {
@@ -48,6 +48,111 @@ aiRouter.get('/provider', (req: AuthenticatedRequest, res: Response) => {
     },
   });
 });
+
+// Timezone conversion & formatting utilities
+function formatInUserTimezone(
+  date: Date | string | number | null | undefined,
+  timeZone: string = 'America/Sao_Paulo',
+  options?: Intl.DateTimeFormatOptions
+): string {
+  if (!date) return '';
+  const d = typeof date === 'string' || typeof date === 'number' ? new Date(date) : date;
+  if (isNaN(d.getTime())) return '';
+  try {
+    return new Intl.DateTimeFormat('pt-BR', {
+      timeZone: timeZone || 'America/Sao_Paulo',
+      dateStyle: 'short',
+      timeStyle: 'medium',
+      ...options,
+    }).format(d);
+  } catch (e) {
+    return d.toISOString();
+  }
+}
+
+function getNowPartsInTimezone(timeZone: string = 'America/Sao_Paulo') {
+  const tz = timeZone || 'America/Sao_Paulo';
+  const now = new Date();
+  try {
+    const formatter = new Intl.DateTimeFormat('pt-BR', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      weekday: 'long',
+      hour12: false,
+    });
+    const parts = formatter.formatToParts(now);
+    const partMap: Record<string, string> = {};
+    for (const p of parts) {
+      partMap[p.type] = p.value;
+    }
+    return {
+      year: parseInt(partMap.year, 10),
+      month: parseInt(partMap.month, 10),
+      day: parseInt(partMap.day, 10),
+      hour: parseInt(partMap.hour, 10),
+      minute: parseInt(partMap.minute, 10),
+      second: parseInt(partMap.second, 10),
+      weekday: partMap.weekday || '',
+      formattedFull: `${partMap.day}/${partMap.month}/${partMap.year} ${partMap.hour}:${partMap.minute}:${partMap.second}`,
+      dateIso: `${partMap.year}-${partMap.month}-${partMap.day}`,
+      timeZone: tz,
+    };
+  } catch (err) {
+    return {
+      year: now.getUTCFullYear(),
+      month: now.getUTCMonth() + 1,
+      day: now.getUTCDate(),
+      hour: now.getUTCHours(),
+      minute: now.getUTCMinutes(),
+      second: now.getUTCSeconds(),
+      weekday: 'dia',
+      formattedFull: now.toISOString(),
+      dateIso: now.toISOString().slice(0, 10),
+      timeZone: tz,
+    };
+  }
+}
+
+function getZonedDate(
+  year: number,
+  month: number,
+  day: number,
+  hour: number = 0,
+  minute: number = 0,
+  second: number = 0,
+  timeZone: string = 'America/Sao_Paulo'
+): Date {
+  const tz = timeZone || 'America/Sao_Paulo';
+  try {
+    const utcGuess = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+    const testParts = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: 'numeric',
+      second: 'numeric',
+      hour12: false,
+    }).formatToParts(utcGuess);
+    const p: Record<string, number> = {};
+    testParts.forEach((x) => {
+      if (x.type !== 'literal') p[x.type] = parseInt(x.value, 10);
+    });
+    const tzDate = new Date(
+      Date.UTC(p.year, p.month - 1, p.day, p.hour === 24 ? 0 : p.hour, p.minute, p.second)
+    );
+    const offset = tzDate.getTime() - utcGuess.getTime();
+    return new Date(utcGuess.getTime() - offset);
+  } catch (err) {
+    return new Date(year, month - 1, day, hour, minute, second);
+  }
+}
 
 // GET /api/ai/models - List available models from active provider
 aiRouter.get('/models', async (req: AuthenticatedRequest, res: Response) => {
@@ -956,6 +1061,75 @@ const listNotesDeclaration: FunctionDeclaration = {
   },
 };
 
+const getTeamGoalsProgressDeclaration: FunctionDeclaration = {
+  name: 'get_team_goals_progress',
+  description: 'Consulta o progresso das metas semanais de horas de todos os membros do workspace atual, permitindo que o Cronos analise o desempenho da equipe e gere relatórios de produtividade.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      workspace_id: {
+        type: Type.STRING,
+        description: 'ID opcional do workspace. Se omitido, utiliza o workspace atual ativo do usuário.',
+      },
+    },
+  },
+};
+
+const getTeamWorkSummaryDeclaration: FunctionDeclaration = {
+  name: 'get_team_work_summary',
+  description: 'Obtém um resumo consolidado das horas trabalhadas, sessões e tarefas da equipe no workspace para geração de relatórios gerenciais e acompanhamento de fluxo.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      days: {
+        type: Type.NUMBER,
+        description: 'Número de dias passados para o resumo (ex: 7 para última semana, 30 para último mês). Padrão: 7.',
+      },
+      workspace_id: {
+        type: Type.STRING,
+        description: 'ID opcional do workspace.',
+      },
+    },
+  },
+};
+
+const getClientCurrentTimeDeclaration: FunctionDeclaration = {
+  name: 'get_client_current_time',
+  description: 'Obtém o horário e data atual exatos do cliente no fuso horário configurado, permitindo verificar relógios e marcações temporais.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {},
+  },
+};
+
+const getUserTimezoneDeclaration: FunctionDeclaration = {
+  name: 'get_user_timezone',
+  description: 'Obtém o fuso horário (timezone) atualmente configurado para o usuário e workspace, data/hora local atual e dia da semana.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {},
+  },
+};
+
+const updateUserTimezoneDeclaration: FunctionDeclaration = {
+  name: 'update_user_timezone',
+  description: 'Configura ou altera o fuso horário (timezone IANA, ex: America/Sao_Paulo, America/Manaus, America/Cuiaba, America/Belem, America/Fortaleza, America/Recife, America/Noronha, Europe/Lisbon, UTC) do usuário e opcionalmente do workspace.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      timezone: {
+        type: Type.STRING,
+        description: 'Identificador de fuso horário IANA válido (ex: America/Sao_Paulo, America/Manaus, America/Cuiaba, Europe/Lisbon, America/New_York, UTC).',
+      },
+      apply_to_workspace: {
+        type: Type.BOOLEAN,
+        description: 'Se true, atualiza também o fuso horário padrão do workspace atual. Padrão: true.',
+      },
+    },
+    required: ['timezone'],
+  },
+};
+
 const AI_TOOLS = [
   searchHistoryDeclaration,
   getActiveSessionDeclaration,
@@ -974,6 +1148,11 @@ const AI_TOOLS = [
   suggestTasksFromCommitsDeclaration,
   createNoteDeclaration,
   listNotesDeclaration,
+  getTeamGoalsProgressDeclaration,
+  getTeamWorkSummaryDeclaration,
+  getUserTimezoneDeclaration,
+  getClientCurrentTimeDeclaration,
+  updateUserTimezoneDeclaration,
 ];
 
 // Tool Execution Handler with Strict Multi-Tenant Isolation
@@ -983,7 +1162,8 @@ async function executeTool(
   tenantId: string,
   userId: string,
   userHourlyRate: number,
-  workspaceId?: string
+  workspaceId?: string,
+  userTimezone: string = 'America/Sao_Paulo'
 ): Promise<{ result: any; sessionUpdated?: boolean; clientsUpdated?: boolean; notesUpdated?: boolean }> {
   switch (toolName) {
     case 'get_active_session': {
@@ -1012,6 +1192,8 @@ async function executeTool(
           title: active.title,
           notes: active.notes || null,
           start_time: active.start_time,
+          start_time_local: formatInUserTimezone(active.start_time, userTimezone),
+          timezone: userTimezone,
           target_minutes: active.target_minutes,
           elapsed_minutes: elapsedMinutes,
           estimated_billable: `R$ ${billable.toFixed(2)}`,
@@ -1080,6 +1262,25 @@ async function executeTool(
       const serverStartTime = new Date();
       const publicToken = crypto.randomBytes(16).toString('hex');
 
+      let finalStartTime = serverStartTime;
+      let isRetroactive = false;
+      let resolvedRetroMinutes: number | null = null;
+      let resolvedReason: string | null = null;
+
+      if (args.retroactive_minutes && Number(args.retroactive_minutes) > 0) {
+        if (!args.retroactive_reason || !String(args.retroactive_reason).trim()) {
+          return {
+            result: {
+              error: 'Para iniciar o cronômetro com tempo retroativo, é obrigatório fornecer o motivo (ex: "Esqueci de iniciar o timer").',
+            },
+          };
+        }
+        isRetroactive = true;
+        resolvedReason = String(args.retroactive_reason).trim();
+        resolvedRetroMinutes = Math.max(1, Math.round(Number(args.retroactive_minutes)));
+        finalStartTime = new Date(serverStartTime.getTime() - resolvedRetroMinutes * 60 * 1000);
+      }
+
       // Check workspace default target minutes if none specified
       let resolvedTarget = args.target_minutes ? Number(args.target_minutes) : null;
       if (!resolvedTarget) {
@@ -1095,11 +1296,14 @@ async function executeTool(
         client_id: resolvedClientId || (prevSession ? prevSession.client_id : null),
         title: args.title?.trim() || (prevSession ? `Continuação: ${prevSession.title}` : 'Sessão de Foco'),
         notes: args.notes ? String(args.notes).trim() : null,
-        start_time: serverStartTime,
+        start_time: finalStartTime,
         end_time: null,
         target_minutes: resolvedTarget,
         previous_session_id: prevSession ? prevSession.id : null,
         public_token: publicToken,
+        is_retroactive: isRetroactive,
+        retroactive_reason: resolvedReason,
+        retroactive_minutes: resolvedRetroMinutes,
       });
 
       return {
@@ -1524,17 +1728,21 @@ async function executeTool(
       };
 
       if (args.start_date && args.end_date) {
+        const [sY, sM, sD] = args.start_date.split('-').map(Number);
+        const [eY, eM, eD] = args.end_date.split('-').map(Number);
         whereClause.start_time = {
-          [Op.gte]: new Date(`${args.start_date}T00:00:00`),
-          [Op.lte]: new Date(`${args.end_date}T23:59:59`),
+          [Op.gte]: getZonedDate(sY, sM, sD, 0, 0, 0, userTimezone),
+          [Op.lte]: getZonedDate(eY, eM, eD, 23, 59, 59, userTimezone),
         };
       } else if (args.start_date) {
+        const [sY, sM, sD] = args.start_date.split('-').map(Number);
         whereClause.start_time = {
-          [Op.gte]: new Date(`${args.start_date}T00:00:00`),
+          [Op.gte]: getZonedDate(sY, sM, sD, 0, 0, 0, userTimezone),
         };
       } else if (args.end_date) {
+        const [eY, eM, eD] = args.end_date.split('-').map(Number);
         whereClause.start_time = {
-          [Op.lte]: new Date(`${args.end_date}T23:59:59`),
+          [Op.lte]: getZonedDate(eY, eM, eD, 23, 59, 59, userTimezone),
         };
       }
 
@@ -1601,7 +1809,10 @@ async function executeTool(
           title: s.title,
           notes: s.notes || null,
           start_time: s.start_time,
+          start_time_local: formatInUserTimezone(s.start_time, userTimezone),
           end_time: s.end_time,
+          end_time_local: s.end_time ? formatInUserTimezone(s.end_time, userTimezone) : null,
+          timezone: userTimezone,
           duration_minutes: durationMin,
           client: s.Client ? `${s.Client.name} (${s.Client.company || 'PJ'})` : 'Geral (sem cliente)',
           billable_amount: billable,
@@ -1709,16 +1920,18 @@ async function executeTool(
     }
 
     case 'get_financial_summary': {
-      const now = new Date();
+      const nowParts = getNowPartsInTimezone(userTimezone);
       let fromDate: Date | null = null;
 
       if (args.period === 'today') {
-        fromDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+        fromDate = getZonedDate(nowParts.year, nowParts.month, nowParts.day, 0, 0, 0, userTimezone);
       } else if (args.period === 'week') {
-        const day = now.getDay() || 7;
-        fromDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day + 1, 0, 0, 0);
+        const nowZoned = getZonedDate(nowParts.year, nowParts.month, nowParts.day, 0, 0, 0, userTimezone);
+        const dayOfWeek = nowZoned.getDay();
+        const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+        fromDate = new Date(nowZoned.getTime() + diffToMonday * 86400000);
       } else if (args.period === 'month') {
-        fromDate = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
+        fromDate = getZonedDate(nowParts.year, nowParts.month, 1, 0, 0, 0, userTimezone);
       }
 
       const whereClause: any = {
@@ -1752,6 +1965,9 @@ async function executeTool(
       return {
         result: {
           period: args.period || 'all',
+          timezone: userTimezone,
+          reference_local_date: nowParts.dateIso,
+          reference_local_time: nowParts.formattedFull,
           sessions_count: sessions.length,
           total_minutes: totalMinutes,
           total_hours: (totalMinutes / 60).toFixed(2),
@@ -1964,6 +2180,281 @@ async function executeTool(
       };
     }
 
+    case 'get_team_goals_progress': {
+      let targetWsId = args.workspace_id || workspaceId;
+      if (!targetWsId) {
+        const ws = await Workspace.findOne({ where: { tenant_id: tenantId } });
+        targetWsId = ws?.id;
+      }
+      if (!targetWsId) {
+        return { result: { error: 'Nenhum workspace encontrado.' } };
+      }
+
+      const membership = await WorkspaceMember.findOne({
+        where: { workspace_id: targetWsId, user_id: userId },
+      });
+      if (!membership) {
+        return { result: { error: 'Acesso negado ao workspace.' } };
+      }
+
+      const members = await WorkspaceMember.findAll({
+        where: { workspace_id: targetWsId },
+        include: [{ model: User, as: 'User', attributes: ['id', 'name', 'email'] }],
+      });
+
+      const nowParts = getNowPartsInTimezone(userTimezone);
+      const nowZoned = getZonedDate(
+        nowParts.year,
+        nowParts.month,
+        nowParts.day,
+        nowParts.hour,
+        nowParts.minute,
+        nowParts.second,
+        userTimezone
+      );
+      const dayOfWeek = nowZoned.getDay();
+      const daysElapsed = Math.max(1, dayOfWeek === 0 ? 7 : dayOfWeek);
+      const projectionFactor = 7 / daysElapsed;
+      const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+      const startOfWeek = getZonedDate(
+        nowParts.year,
+        nowParts.month,
+        nowParts.day + diffToMonday,
+        0,
+        0,
+        0,
+        userTimezone
+      );
+
+      const sessions = await TimeSession.findAll({
+        where: {
+          workspace_id: targetWsId,
+          start_time: {
+            [Op.gte]: startOfWeek,
+          },
+        },
+      });
+
+      const nowMs = Date.now();
+      const calcDurationSeconds = (s: any) => {
+        const start = s.start_time ? new Date(s.start_time).getTime() : nowMs;
+        const end = s.end_time ? new Date(s.end_time).getTime() : nowMs;
+        return Math.max(0, Math.floor((end - start) / 1000));
+      };
+
+      const weekLoggedMap: Record<string, number> = {};
+      sessions.forEach((s: any) => {
+        const uid = s.user_id;
+        const duration = calcDurationSeconds(s);
+        if (!weekLoggedMap[uid]) weekLoggedMap[uid] = 0;
+        weekLoggedMap[uid] += duration;
+      });
+
+      let totalMembersWithGoals = 0;
+      let membersMetGoal = 0;
+      let totalLoggedHoursAll = 0;
+      let totalTargetHoursAll = 0;
+      let totalProjectedHoursAll = 0;
+
+      const memberGoals = members.map((m: any) => {
+        const u = m.User || m.user;
+        const weekSeconds = weekLoggedMap[m.user_id] || 0;
+        const loggedHoursWeek = Number((weekSeconds / 3600).toFixed(2));
+        const projectedHoursWeek = Number((loggedHoursWeek * projectionFactor).toFixed(2));
+        const weeklyTarget = m.weekly_target_hours;
+
+        let weekProgressPercent = 0;
+        let weekStatus = 'no_goal';
+        if (weeklyTarget !== null && weeklyTarget !== undefined && weeklyTarget > 0) {
+          weekProgressPercent = Math.min(200, Math.round((loggedHoursWeek / weeklyTarget) * 100));
+          if (loggedHoursWeek >= weeklyTarget) {
+            weekStatus = 'met';
+          } else if (weekProgressPercent >= 60) {
+            weekStatus = 'on_track';
+          } else {
+            weekStatus = 'behind';
+          }
+        }
+
+        if (weeklyTarget !== null && weeklyTarget !== undefined && weeklyTarget > 0) {
+          totalMembersWithGoals++;
+          totalLoggedHoursAll += loggedHoursWeek;
+          totalTargetHoursAll += Number(weeklyTarget);
+          totalProjectedHoursAll += projectedHoursWeek;
+          if (weekStatus === 'met') membersMetGoal++;
+        }
+
+        return {
+          userId: m.user_id,
+          name: u?.name || 'Membro',
+          email: u?.email || '',
+          role: m.role,
+          weekly_target_hours: m.weekly_target_hours ?? null,
+          logged_hours_week: loggedHoursWeek,
+          projected_hours_week: projectedHoursWeek,
+          week_progress_percent: weekProgressPercent,
+          week_status: weekStatus,
+        };
+      });
+
+      const completionRate = totalMembersWithGoals > 0 ? Math.round((membersMetGoal / totalMembersWithGoals) * 100) : 0;
+
+      return {
+        result: {
+          total_members_with_goals: totalMembersWithGoals,
+          members_met_goal: membersMetGoal,
+          team_overall_completion_rate: `${completionRate}%`,
+          total_logged_hours: `${Number(totalLoggedHoursAll.toFixed(2))}h`,
+          total_target_hours: `${Number(totalTargetHoursAll.toFixed(2))}h`,
+          projected_team_hours: `${Number(totalProjectedHoursAll.toFixed(2))}h`,
+          members: memberGoals,
+        },
+      };
+    }
+
+    case 'get_team_work_summary': {
+      let targetWsId = args.workspace_id || workspaceId;
+      if (!targetWsId) {
+        const ws = await Workspace.findOne({ where: { tenant_id: tenantId } });
+        targetWsId = ws?.id;
+      }
+      if (!targetWsId) {
+        return { result: { error: 'Nenhum workspace encontrado.' } };
+      }
+
+      const days = Number(args.days) || 7;
+      const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+      const sessions = await TimeSession.findAll({
+        where: {
+          workspace_id: targetWsId,
+          start_time: { [Op.gte]: cutoff },
+        },
+        include: [
+          { model: Task, as: 'Tasks' },
+          { model: User, as: 'User', attributes: ['id', 'name', 'email'] },
+        ],
+        order: [['start_time', 'DESC']],
+      });
+
+      let totalSecs = 0;
+      const userHoursMap: Record<string, { name: string; seconds: number; sessionsCount: number; tasksCount: number }> = {};
+
+      sessions.forEach((s: any) => {
+        const u = s.User || s.user;
+        const uid = s.user_id;
+        const start = s.start_time ? new Date(s.start_time).getTime() : Date.now();
+        const end = s.end_time ? new Date(s.end_time).getTime() : Date.now();
+        const secs = Math.max(0, Math.floor((end - start) / 1000));
+
+        totalSecs += secs;
+
+        if (!userHoursMap[uid]) {
+          userHoursMap[uid] = {
+            name: u?.name || 'Membro',
+            seconds: 0,
+            sessionsCount: 0,
+            tasksCount: 0,
+          };
+        }
+        userHoursMap[uid].seconds += secs;
+        userHoursMap[uid].sessionsCount += 1;
+        userHoursMap[uid].tasksCount += (s.Tasks || []).length;
+      });
+
+      const membersSummary = Object.entries(userHoursMap).map(([uid, data]) => ({
+        user_id: uid,
+        name: data.name,
+        total_hours: Number((data.seconds / 3600).toFixed(2)),
+        sessions_count: data.sessionsCount,
+        tasks_count: data.tasksCount,
+      }));
+
+      return {
+        result: {
+          period_days: days,
+          timezone: userTimezone,
+          total_sessions: sessions.length,
+          total_team_hours: Number((totalSecs / 3600).toFixed(2)),
+          members_summary: membersSummary,
+        },
+      };
+    }
+
+    case 'get_user_timezone': {
+      const u = await User.findByPk(userId);
+      const ws = workspaceId ? await Workspace.findByPk(workspaceId) : null;
+      const effectiveTz = userTimezone;
+      const nowInfo = getNowPartsInTimezone(effectiveTz);
+      return {
+        result: {
+          user_timezone: u?.timezone || 'America/Sao_Paulo',
+          workspace_timezone: ws?.timezone || 'America/Sao_Paulo',
+          effective_timezone: effectiveTz,
+          current_local_time: nowInfo.formattedFull,
+          current_date_iso: nowInfo.dateIso,
+          weekday: nowInfo.weekday,
+        },
+      };
+    }
+
+    case 'get_client_current_time': {
+      const nowInfo = getNowPartsInTimezone(userTimezone);
+      return {
+        result: {
+          success: true,
+          current_time: nowInfo.formattedFull,
+          date_iso: nowInfo.dateIso,
+          hour: nowInfo.hour,
+          minute: nowInfo.minute,
+          second: nowInfo.second,
+          weekday: nowInfo.weekday,
+          timezone: userTimezone,
+          message: `Horário atual do cliente obtido com sucesso: ${nowInfo.formattedFull} (${userTimezone})`,
+        },
+      };
+    }
+
+    case 'update_user_timezone': {
+      const newTz = (args.timezone || '').trim();
+      if (!newTz) {
+        return { result: { error: 'Fuso horário inválido ou não informado.' } };
+      }
+      try {
+        Intl.DateTimeFormat(undefined, { timeZone: newTz });
+      } catch (e) {
+        return {
+          result: {
+            error: `Fuso horário "${newTz}" não é um identificador IANA válido (ex: 'America/Sao_Paulo', 'America/Manaus', 'Europe/Lisbon', 'UTC').`,
+          },
+        };
+      }
+
+      const u = await User.findByPk(userId);
+      if (u) {
+        u.timezone = newTz;
+        await u.save();
+      }
+      if (args.apply_to_workspace !== false && workspaceId) {
+        const ws = await Workspace.findByPk(workspaceId);
+        if (ws) {
+          ws.timezone = newTz;
+          await ws.save();
+        }
+      }
+
+      const nowInfo = getNowPartsInTimezone(newTz);
+      return {
+        result: {
+          success: true,
+          message: `Fuso horário atualizado com sucesso para "${newTz}".`,
+          new_timezone: newTz,
+          current_local_time_in_new_tz: nowInfo.formattedFull,
+          weekday: nowInfo.weekday,
+        },
+      };
+    }
+
     default:
       return { result: { error: `Ferramenta desconhecida: ${toolName}` } };
   }
@@ -2082,6 +2573,35 @@ aiRouter.post('/chat', checkAiWorkspaceDailyLimit, async (req: AuthenticatedRequ
     const user = await User.findByPk(userId);
     const hourlyRate = user?.default_hourly_rate || 150.0;
 
+    // Resolve effective user timezone
+    let userTimezone = (req.body.timezone || (req.headers['x-timezone'] as string) || '').trim();
+    if (!userTimezone && user?.timezone) {
+      userTimezone = user.timezone;
+    }
+    if (!userTimezone && workspaceId) {
+      const currentWs = await Workspace.findByPk(workspaceId);
+      if (currentWs?.timezone) {
+        userTimezone = currentWs.timezone;
+      }
+    }
+    if (!userTimezone) {
+      const currentTenant = await Tenant.findByPk(tenantId);
+      if (currentTenant?.timezone) {
+        userTimezone = currentTenant.timezone;
+      }
+    }
+    if (!userTimezone) {
+      userTimezone = 'America/Sao_Paulo';
+    }
+
+    try {
+      Intl.DateTimeFormat(undefined, { timeZone: userTimezone });
+    } catch (e) {
+      userTimezone = 'America/Sao_Paulo';
+    }
+
+    const nowParts = getNowPartsInTimezone(userTimezone);
+
     // Increment daily AI message usage for the workspace upon accepting message
     if (workspaceId) {
       await incrementWorkspaceAiDailyUsage(workspaceId, tenantId);
@@ -2097,6 +2617,14 @@ aiRouter.post('/chat', checkAiWorkspaceDailyLimit, async (req: AuthenticatedRequ
 
     // System instruction specifying role, behavior, and capabilities
     const systemInstruction = `Você é o Cronos AI, o assistente inteligente oficial deste sistema de Time Tracking, Produtividade e Faturamento Multitenant.
+
+### 🕒 FUSO HORÁRIO E DATA/HORA DO USUÁRIO (DIRETRIZ OBRIGATÓRIA):
+- Fuso Horário Configurado: "${userTimezone}"
+- Data e Hora Atual Local do Usuário: ${nowParts.formattedFull} (${nowParts.weekday}, ${nowParts.dateIso})
+- REGRA CRÍTICA: Você NUNCA deve responder em UTC ou assumir horários UTC. Todas as referências temporais como "agora", "hoje", "ontem", "esta semana", "este mês", "bom dia/boa tarde/boa noite", ou horários de início e término de sessões e tarefas DEVEM ser estritamente interpretados e calculados no fuso horário do usuário ("${userTimezone}").
+- Se o usuário perguntar o horário ou que dia é hoje, informe a data/hora local acima (${nowParts.formattedFull}) e o fuso horário configurado ("${userTimezone}").
+- Você possui a ferramenta get_user_timezone para inspecionar os detalhes do fuso, get_client_current_time para obter o horário atual exato do cliente, e update_user_timezone para alterar o fuso horário do usuário e do workspace quando solicitado.
+
 Seu papel é ajudar o profissional freelancer, consultor ou equipe a gerenciar seu tempo, sessões e clientes com máxima produtividade:
 1. Controle de Cronômetro e Metas:
    - Inicie sessões com start_timer (com título, observações gerais notes, meta de minutos target_minutes e cliente). O sistema aplica automaticamente o Objetivo de Tempo padrão do workspace se nenhum for especificado.
@@ -2123,10 +2651,13 @@ Seu papel é ajudar o profissional freelancer, consultor ou equipe a gerenciar s
    - Pesquise sessões e tarefas com search_history (que busca em títulos, observações da sessão e tarefas/observações).
    - Consulte ou cadastre clientes com list_clients e create_client (incluindo meta diária de minutos daily_target_minutes, taxa horária, observações contratuais e contatos).
    - Obtenha balanço financeiro e de horas com get_financial_summary.
-8. Extração de Tarefas a partir de Commits do Git:
+8. Progresso da Equipe e Relatórios Gerenciais:
+    - Consulte o progresso das metas semanais, horas realizadas e projeções de entrega da equipe com get_team_goals_progress.
+    - Obtenha um resumo consolidado de horas e sessões da equipe para relatórios de produtividade com get_team_work_summary.
+9. Extração de Tarefas a partir de Commits do Git:
    - Analise logs de commit, mensagens git ou diffs com suggest_tasks_from_commits para sugerir tarefas estruturadas com título profissional e notas técnicas.
    - Pode adicionar diretamente à sessão ativa se o usuário solicitar ou apenas apresentar para aprovação prévia.
-9. Execução Autônoma em Cadeia:
+10. Execução Autônoma em Cadeia:
    - Execute até 60 etapas autônomas consecutivas para atender solicitações compostas.
 Responda sempre em Português do Brasil com tom profissional, prestativo e objetivo, usando formatação Markdown elegante quando apropriado.`;
 
@@ -2186,7 +2717,8 @@ Responda sempre em Português do Brasil com tom profissional, prestativo e objet
         tenantId,
         userId,
         hourlyRate,
-        executeToolFn: (name, args, tId, uId, rate) => executeTool(name, args, tId, uId, rate, workspaceId),
+        executeToolFn: (name, args, tId, uId, rate) =>
+          executeTool(name, args, tId, uId, rate, workspaceId, userTimezone),
       });
 
       // Save model response to database
@@ -2211,6 +2743,7 @@ Responda sempre em Português do Brasil com tom profissional, prestativo e objet
         provider: 'kilo',
         model: kiloResult.modelUsed,
         usage: updatedUsage,
+        timezone: userTimezone,
       });
     }
 
@@ -2361,7 +2894,8 @@ Responda sempre em Português do Brasil com tom profissional, prestativo e objet
             tenantId,
             userId,
             hourlyRate,
-            workspaceId
+            workspaceId,
+            userTimezone
           );
 
           if (sessionUpdated) hasSessionChanged = true;
@@ -2425,6 +2959,7 @@ Responda sempre em Português do Brasil com tom profissional, prestativo e objet
       clientsChanged: hasClientsChanged,
       notesChanged: hasNotesChanged,
       usage: updatedUsage,
+      timezone: userTimezone,
     });
   } catch (err: any) {
     console.error('Error in AI Chat API route:', err);
